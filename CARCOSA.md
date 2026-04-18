@@ -1,4 +1,4 @@
-# Carcosa v1.4
+# Carcosa v1.5
 ## Custom firmware for the Ambika polysynth
 
 Carcosa replaces the stock Ambika firmware with a focused set of synthesis engines, expanded envelope capabilities, and a streamlined interface.
@@ -158,15 +158,17 @@ Drives a sine wave through a nonlinear waveshaper. Works as a normal oscillator 
 
 ### Entering special modes
 
-- **Hold S1 + turn encoder**: Cycle through classic -> fm4op -> pluck -> wcoast
-- This works from the osc page or any special mode page
+1. While on the osc or mixer page, **press S1** — LED 1 starts blinking (mode select active)
+2. **Turn encoder** to cycle through: classic, fm4op, pluck, wcoast
+3. **Press S1 again** to confirm and exit mode select
+
+Mode select also works from inside any special mode page. Pressing any other button exits mode select automatically.
 
 ### Inside special mode pages
 
 - **S1 press**: Toggle between page 1 and page 2
 - **Encoder**: Scroll through parameters on the current page, click to edit
 - **Knobs 1-8**: Direct control of the 8 parameters shown on screen
-- **Hold S1 + turn encoder**: Switch to a different synthesis mode
 
 ### Other pages
 

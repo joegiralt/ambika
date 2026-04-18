@@ -219,6 +219,7 @@ class Ui {
   static uint8_t pot_value_[8];
   
   static uint8_t active_group_;
+  static uint8_t s1_held_;
   static UiPageNumber most_recent_page_in_group_[9];
   static EventHandlers event_handlers_;
   static PageInfo page_info_;

@@ -190,6 +190,7 @@ Pots Ui::pots_;
 UiState Ui::state_;
 EventQueue<8> Ui::queue_;
 uint8_t Ui::pot_value_[8];
+uint8_t Ui::s1_held_;
 UiPageNumber Ui::most_recent_page_in_group_[9];
 
 PageInfo Ui::page_info_;
@@ -335,15 +336,8 @@ void Ui::DoEvents() {
         
       case CONTROL_ENCODER:
         if (e.control_id == 0) {
-          // Hold S1 + encoder = cycle synthesis mode.
-          // When S1 is held, Poll() multiplies increment by 8.
-          uint8_t s1_held = (e.value >= 8 || e.value <= -8);
-          if (s1_held && (
-              active_page_ == PAGE_OSCILLATORS ||
-              active_page_ == PAGE_FM4OP ||
-              active_page_ == PAGE_KS_PLUCK ||
-              active_page_ == PAGE_WESTCOAST)) {
-            // Cycle through modes: classic, fm4op, pluck, wcoast.
+          if (s1_held_) {
+            // Mode select active: encoder cycles synthesis modes.
             static const uint8_t modes[] PROGMEM = {
               WAVEFORM_SAW, WAVEFORM_FM4OP,
               WAVEFORM_KS_PLUCK, WAVEFORM_WESTCOAST
@@ -355,12 +349,11 @@ void Ui::DoEvents() {
             uint8_t* patch = multi.mutable_part(
                 state_.active_part)->mutable_raw_patch_data();
             uint8_t current = patch[0];
-            // Find current mode index.
             int8_t idx = 0;
             for (uint8_t m = 0; m < 4; ++m) {
               if (current == pgm_read_byte(&modes[m])) { idx = m; break; }
             }
-            idx += (e.value > 0) ? 1 : -1;
+            idx += (static_cast<int8_t>(e.value) > 0) ? 1 : -1;
             if (idx < 0) idx = 3;
             if (idx > 3) idx = 0;
             patch[0] = pgm_read_byte(&modes[idx]);
@@ -375,14 +368,24 @@ void Ui::DoEvents() {
           state_.active_part = new_part;
         }
         break;
-        
+
       case CONTROL_SWITCH:
+        // Double-press S1 on osc/special page toggles mode select.
+        if (e.control_id == 0 && (
+            active_page_ == PAGE_OSCILLATORS ||
+            active_page_ == PAGE_MIXER ||
+            active_page_ == PAGE_FM4OP ||
+            active_page_ == PAGE_KS_PLUCK ||
+            active_page_ == PAGE_WESTCOAST)) {
+          s1_held_ = !s1_held_;
+          break;
+        }
+        // Any other button exits mode select.
+        s1_held_ = 0;
         if (!(*event_handlers_.OnKey)(e.control_id)) {
-          // Cycle through the next page in the group.
           if (page_info_.group == e.control_id) {
             ShowPage(page_info_.next_page);
           } else {
-            // Jump to the most recently visited page in the group.
             ShowPage(most_recent_page_in_group_[e.control_id]);
           }
         }
@@ -429,6 +432,15 @@ void Ui::DoEvents() {
         velocity | leds.pixel(LED_PART_1 + led_index));
   }
   (*event_handlers_.UpdateLeds)();
+  // Blink LED 1 when S1 held on osc/special page (mode select ready).
+  if (s1_held_ && (
+      active_page_ == PAGE_OSCILLATORS ||
+      active_page_ == PAGE_FM4OP ||
+      active_page_ == PAGE_KS_PLUCK ||
+      active_page_ == PAGE_WESTCOAST)) {
+    uint8_t blink = (cycle_ & 0x40) ? 0xf0 : 0x0f;
+    leds.set_pixel(LED_1, blink);
+  }
   if (system_settings.data().swap_leds_colors) {
     for (uint8_t i = 0; i < 15; ++i) {
       leds.set_pixel(i, U8Swap4(leds.pixel(i)));
