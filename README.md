@@ -1,63 +1,80 @@
-# Ambika
-## A hybrid MIDI polysynth and voicecard host.
+# Carcosa
+## Alternative firmware for the Ambika polysynth
 
-Ambika consists of a compact motherboard serving as a "host" for up to 6 sound synthesis voicecard. While this design is primarily intended to be a flexible hybrid polysynth, it could also be used as a drum module/drum machine.
+Carcosa is a custom firmware for the [Mutable Instruments Ambika](https://pichenettes.github.io/mutable-instruments-diy-archive/ambika/) that replaces the stock oscillator set with focused synthesis engines while keeping the analog signal path and 6-voice architecture intact.
 
-The motherboard comprises 6 audio outputs, each one connected to a voicecard ; a global mono output ; a pair of MIDI input/output ; a SD card slot ; a 5V/8V/-8V power supply capable of delivering 150mA on the 8V rails and 350mA on the 5V rail ; the master MCU and the user interface elements. The voicecards (a pair of each being attached to the 3 voicecard ports) are SPI slaves, they receive note and modulation data from the motherboard ; and output monophonic audio, ideally 1V pp.
+**[Download the latest release](https://github.com/joegiralt/ambika/releases)**
 
-3 designs of voicecards implementing a refined version of the Shruthi-1 engine are provided. Each of those use a different filter (4-Pole with LM13700, 4-Pole with SSM2164, 2-Pole SVF with SSM2164).
+**[Read the full manual](CARCOSA.md)**
 
-Original developer: Emilie Gillet (emilie.o.gillet@gmail.com)
+### Synthesis Engines
 
-The firmware is released under a GPL3.0 license. It includes a variant of the formant synthesis algorithm used in Peter Knight's Cantarino speech synthesizer.
+| Mode | Description |
+|------|-------------|
+| saw, square, triangle, sine | Classic dual-oscillator subtractive (unchanged) |
+| pad | 4-voice detuned supersaw |
+| noise | Filtered noise with variable color |
+| fm4op | 4-operator FM with 8 TX81Z algorithms and 8 waveforms per operator |
+| pluck | Karplus-Strong with 3-read-head ensemble, variable stiffness, 4 excitation types |
+| wcoast | Buchla-style wavefolder with variable fold stages, FM, self-sync, sub oscillator |
+| wshape | Waveshaping through nonlinear transfer function |
 
-The PCB layouts and schematics, documentation, analyses, simulations and 3D models are released under a Creative Commons cc-by-sa 3.0 license.
+### Additional Features
 
-# Build
+- Per-envelope curve modes: exponential, linear, looping, looping linear
+- Analog slop parameter for vintage poly character
+- Smart patch randomizer with per-section depth control
+- S1+encoder synthesis mode navigation
+
+### What was removed
+
+Step sequencer, CZ synthesis (9 variants), old 2-op FM, 8-bit land, dirty PWM, vowel synthesis, and wavetable oscillators (16 + wavequence).
+
+---
+
+## Install
+
+Download `AMBIKA.BIN` and `VOICE.BIN` from the [releases page](https://github.com/joegiralt/ambika/releases).
+
+1. Copy `AMBIKA.BIN` to the root of your SD card
+2. Copy `VOICE.BIN` as `VOICE1.BIN` through `VOICE6.BIN`
+3. Hold **S8** during power-on to flash the controller
+4. Flash each voicecard from the OS info page with **S4**
+
+To revert to stock Ambika firmware, place the original files on the SD card and reflash.
+
+## Build from source
 
 You'll need:
 - make
 - gcc-avr
 - avr-libc
-- avrdude
-- python
-
-On Ubuntu:
-```
-    sudo apt-get install gcc-avr make avr-libc
-```
-
-Next, you'll need to grab the projects this repo depends on.
-```
-    git submodule update --init
-```
-
-Once you've got that all settled, you'll need to change the path to `avr-gcc` in avrlib/makefile.mk
-to match the path on your system.
 
 ```
-    export AVRPATH=`which avr-gcc`
-    sed "s|AVRLIB_TOOLS_PATH ?=.*|AVRLIB_TOOLS_PATH \?= `dirname $AVRPATH`/|" avrlib/makefile.mk > mkfiletmp
-    mv mkfiletmp avrlib/makefile.mk
+sudo apt-get install gcc-avr make avr-libc
+git submodule update --init
+export AVRPATH=$(which avr-gcc)
+sed "s|AVRLIB_TOOLS_PATH ?=.*|AVRLIB_TOOLS_PATH ?= $(dirname $AVRPATH)/|" avrlib/makefile.mk > mkfiletmp
+mv mkfiletmp avrlib/makefile.mk
 ```
 
-Then, for voice card `elf` files:
-
+Build voicecard:
 ```
-    make all
-```
-
-And for voice card `bin` files:
-```
-    make bin
+make all && make bin
 ```
 
-For motherboard `elf` files:
+Build controller:
 ```
-    make bootstrap_controller
+make -f controller/makefile && make -f controller/makefile bin
 ```
 
-For motherboard `bin` files:
+Flash to SD card:
 ```
-    make -f controller/makefile bin
+./flash_sd.sh /mnt/sdcard
 ```
+
+## Credits
+
+Original Ambika firmware by Emilie Gillet (Mutable Instruments). Released under GPL v3.0.
+
+Carcosa firmware by Joseph Martin Giralt.
