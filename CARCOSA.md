@@ -268,6 +268,49 @@ Existing Ambika patches using saw, square, triangle, sine, pad, or noise will wo
 
 ---
 
+## FAQ
+
+**Can I go back to the stock Ambika firmware?**
+Yes. Put the original AMBIKA.BIN and VOICE*.BIN files on the SD card and hold S8 during power-on. The bootloader is never modified — you can always reflash.
+
+**Will my existing patches work?**
+Patches using saw, square, triangle, sine, pad, or noise will sound the same. Patches using removed waveforms (CZ, wavetables, vowel, 8-bit, etc.) will have their oscillator reset to `none` on first load. Filter settings, envelopes, and mod matrix are unchanged.
+
+**Do I need to flash all 6 voicecards?**
+Yes. The voicecard firmware contains the new synthesis engines. If you only flash the controller, the voicecards won't understand the new waveform types and you'll get silence or wrong sounds.
+
+**My Ambika shows garbage on the screen after flashing. Is it bricked?**
+No. Hold S8 during power-on to force the bootloader to reflash from SD card. This always works regardless of what firmware is running.
+
+**Does this work with all voicecard types (4P, SVF, SMR)?**
+Yes. Carcosa only changes the digital oscillator code. The analog filter on each voicecard is untouched and works exactly as before.
+
+**Can I use the special modes (FM, pluck, wcoast) with the analog filter?**
+Yes. The filter is in the analog signal path after the DAC. Every synthesis mode runs through it. FM through the SSM2164 ladder filter sounds great.
+
+**Why remove the wavetables? I used those.**
+The 16 wavetable banks consumed 10.3 KB of flash on a 32 KB chip. Removing them freed enough space for the FM, Karplus-Strong, and west coast engines combined. The tradeoff is intentional — fewer but deeper sound sources.
+
+**Why remove the step sequencer?**
+The step sequencer consumed nearly 2 KB of controller flash and 384 bytes of RAM. Most Ambika owners sequence externally via MIDI. The arpeggiator is still present. Removing the sequencer gave enough headroom to keep all the new UI pages stable.
+
+**Can I use FM on one part and subtractive on another?**
+Yes. Each part selects its own synthesis mode independently. Part 1 can be FM while part 2 plays saw through the filter. The mode is stored per-patch.
+
+**How does the slop parameter work?**
+Each note-on generates a small random pitch offset and envelope timing variation. The amount is controlled by the slop knob on the part page. In a chord, each voice gets a different random value, simulating the component drift of analog polysynths.
+
+**How do looping envelopes work?**
+Set the envelope mode to `loop` or `lpln`. The envelope cycles attack → decay → attack → decay continuously while the key is held. The sustain knob sets the floor of the cycle. When the key is released, the envelope falls to zero at the release rate. This turns an envelope into a function generator, similar to Make Noise Maths.
+
+**What are the 8 FM waveforms?**
+They match the TX81Z: sine, half-sine, absolute sine, quarter sine, half-absolute, triple-absolute, pulse sine, and saw sine. All are derived from the existing sine table with zero extra flash cost.
+
+**Is this open source?**
+Yes. GPL v3.0, same as the original Ambika firmware. Fork it, modify it, share it.
+
+---
+
 ## License
 
 GPL v3.0, same as the original Ambika firmware.
