@@ -69,7 +69,7 @@ class TransientGenerator {
   static uint8_t RenderBlow() {
     decimate_ += 2;
     if (decimate_ >= 16) {
-      decimate_ -= 17;
+      decimate_ -= 16;
       rng_state_ = rng_state_ * 73 + counter_;
       if (decimate_ == 0) {
         --counter_;

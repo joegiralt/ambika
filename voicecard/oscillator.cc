@@ -157,215 +157,6 @@ void Oscillator::RenderSimpleWavetable(uint8_t* buffer) {
   }
 }
 
-// ------- Casio CZ-like synthesis -------------------------------------------
-void Oscillator::RenderCzSaw(uint8_t* buffer) {
-  BEGIN_SAMPLE_LOOP
-    UPDATE_PHASE
-    uint8_t phi = phase.integral >> 8;
-    uint8_t clipped_phi = phi < 0x20 ? phi << 3 : 0xff;
-    // Interpolation causes more aliasing here.
-    *buffer++ = ReadSample(wav_res_sine,
-        U8MixU16(phi, clipped_phi, parameter_ << 1));
-  END_SAMPLE_LOOP
-}
-
-void Oscillator::RenderCzResoSaw(uint8_t* buffer) {
-  uint16_t increment = phase_increment_.integral + (
-      (phase_increment_.integral * uint32_t(parameter_)) >> 2);
-  uint8_t type = shape_ - WAVEFORM_CZ_SAW_LP;
-  uint16_t phase_2 = data_.secondary_phase;
-  BEGIN_SAMPLE_LOOP
-    UPDATE_PHASE
-    if (phase.carry) {
-      phase_2 = ResourcesManager::Lookup<uint16_t, uint8_t>(
-          lut_res_cz_phase_reset, type & 0x03);
-    }
-    phase_2 += increment;
-    uint8_t carrier = ReadSample(wav_res_sine, phase_2);
-    uint8_t window = ~(phase.integral >> 8);
-    if (type & 2) {
-      *buffer++ = S8U8MulShift8(carrier + 128, window) + 128;
-    } else {
-      *buffer++ = U8U8MulShift8(carrier, window);
-    }
-  END_SAMPLE_LOOP
-  data_.secondary_phase = phase_2;  
-}
-
-void Oscillator::RenderCzResoPulse(uint8_t* buffer) {
-  uint16_t increment = phase_increment_.integral + (
-      (phase_increment_.integral * uint32_t(parameter_)) >> 2);
-  uint8_t type = shape_ - WAVEFORM_CZ_SAW_LP;
-  uint16_t phase_2 = data_.secondary_phase;
-  BEGIN_SAMPLE_LOOP
-    UPDATE_PHASE
-    if (phase.carry) {
-      phase_2 = ResourcesManager::Lookup<uint16_t, uint8_t>(
-          lut_res_cz_phase_reset, type & 0x03);
-    }
-    phase_2 += increment;
-    uint8_t carrier = ReadSample(wav_res_sine, phase_2);
-    uint8_t window = 0;
-    if (phase.integral < 0x4000) {
-      window = 255;
-    } else if (phase.integral < 0x8000) {
-      window = ~(phase.integral - 0x4000) >> 6;
-    }
-    if (type == 5) {
-      carrier >>= 1;
-      carrier += 128;
-    }
-    if (type & 2) {
-      *buffer++ = S8U8MulShift8(carrier + 128, window) + 128;
-    } else {
-      *buffer++ = U8U8MulShift8(carrier, window);
-    }
-  END_SAMPLE_LOOP
-  data_.secondary_phase = phase_2;  
-}
-
-void Oscillator::RenderCzResoTri(uint8_t* buffer) {
-  uint16_t increment = phase_increment_.integral + (
-      (phase_increment_.integral * uint32_t(parameter_)) >> 2);
-  uint8_t type = shape_ - WAVEFORM_CZ_SAW_LP;
-  uint16_t phase_2 = data_.secondary_phase;
-  BEGIN_SAMPLE_LOOP
-    UPDATE_PHASE
-    if (phase.carry) {
-      phase_2 = ResourcesManager::Lookup<uint16_t, uint8_t>(
-          lut_res_cz_phase_reset, type & 0x03);
-    }
-    phase_2 += increment;
-    uint8_t carrier = ReadSample(wav_res_sine, phase_2);
-    uint8_t window = (phase.integral & 0x8000) ?
-          ~static_cast<uint8_t>(phase.integral >> 7) :
-          phase.integral >> 7;
-    if (type & 2) {
-      *buffer++ = S8U8MulShift8(carrier + 128, window) + 128;
-    } else {
-      *buffer++ = U8U8MulShift8(carrier, window);
-    }
-  END_SAMPLE_LOOP
-  data_.secondary_phase = phase_2;  
-}
-
-// ------- FM ----------------------------------------------------------------
-void Oscillator::RenderFm(uint8_t* buffer) {
-  uint8_t offset = fm_parameter_;
-  if (offset < 24) {
-    offset = 0;
-  } else if (offset > 48) {
-    offset = 24;
-  } else {
-    offset = offset - 24;
-  }
-  uint16_t multiplier = ResourcesManager::Lookup<uint16_t, uint8_t>(
-      lut_res_fm_frequency_ratios, offset);
-  uint16_t increment = (
-      static_cast<int32_t>(phase_increment_.integral) * multiplier) >> 8;
-  parameter_ <<= 1;
-  
-  uint16_t phase_2 = data_.secondary_phase;
-  BEGIN_SAMPLE_LOOP
-    UPDATE_PHASE
-    phase_2 += increment;
-    uint8_t modulator = InterpolateSample(wav_res_sine,
-        phase_2);
-    uint16_t modulation = modulator * parameter_;
-    *buffer++ = InterpolateSample(wav_res_sine,
-        phase.integral + modulation);
-  END_SAMPLE_LOOP
-  data_.secondary_phase = phase_2;
-}
-
-// ------- 8-bit land --------------------------------------------------------
-void Oscillator::Render8BitLand(uint8_t* buffer) {
-  BEGIN_SAMPLE_LOOP
-    UPDATE_PHASE
-    uint8_t x = parameter_;
-    *buffer++ = (((phase.integral >> 8) ^ (x << 1)) & (~x)) + (x >> 1);
-  END_SAMPLE_LOOP
-}
-
-void Oscillator::RenderVowel(uint8_t* buffer) {
-  data_.vw.update = (data_.vw.update + 1) & 3;
-  if (!data_.vw.update) {
-    uint8_t offset_1 = U8ShiftRight4(parameter_);
-    offset_1 = U8U8Mul(offset_1, 7);
-    uint8_t offset_2 = offset_1 + 7;
-    uint8_t balance = parameter_ & 15;
-    
-    // Interpolate formant frequencies.
-    for (uint8_t i = 0; i < 3; ++i) {
-      data_.vw.formant_increment[i] = U8U4MixU12(
-          ResourcesManager::Lookup<uint8_t, uint8_t>(
-              wav_res_vowel_data, offset_1 + i),
-          ResourcesManager::Lookup<uint8_t, uint8_t>(
-              wav_res_vowel_data, offset_2 + i),
-          balance);
-      data_.vw.formant_increment[i] <<= 3;
-    }
-    
-    // Interpolate formant amplitudes.
-    // formant_amplitude[3] is an alias of noise_modulation
-    for (uint8_t i = 0; i < 4; ++i) {
-      uint8_t amplitude_a = ResourcesManager::Lookup<uint8_t, uint8_t>(
-          wav_res_vowel_data,
-          offset_1 + 3 + i);
-      uint8_t amplitude_b = ResourcesManager::Lookup<uint8_t, uint8_t>(
-          wav_res_vowel_data,
-          offset_2 + 3 + i);
-      data_.vw.formant_amplitude[i] = U8U4MixU8(
-          amplitude_a,
-          amplitude_b, balance);
-    }
-  }
-  
-  int16_t phase_noise = S8S8Mul(Random::state_msb(), data_.vw.noise_modulation);
-  BEGIN_SAMPLE_LOOP
-    int8_t result = 0;
-    uint8_t phaselet;
-    
-    data_.vw.formant_phase[0] += data_.vw.formant_increment[0];
-    phaselet = (data_.vw.formant_phase[0] >> 8) & 0xf0;
-    result = ResourcesManager::Lookup<uint8_t, uint8_t>(
-        wav_res_formant_sine,
-        phaselet | data_.vw.formant_amplitude[0]);
-
-    data_.vw.formant_phase[1] += data_.vw.formant_increment[1];
-    phaselet = (data_.vw.formant_phase[1] >> 8) & 0xf0;
-    result += ResourcesManager::Lookup<uint8_t, uint8_t>(
-        wav_res_formant_sine,
-        phaselet | data_.vw.formant_amplitude[1]);
-    
-    data_.vw.formant_phase[2] += data_.vw.formant_increment[2];
-    phaselet = (data_.vw.formant_phase[2] >> 8) & 0xf0;
-    result += ResourcesManager::Lookup<uint8_t, uint8_t>(
-        wav_res_formant_square,
-        phaselet | data_.vw.formant_amplitude[2]);
-    
-    result = S8U8MulShift8(result, phase.integral >> 8);
-    phase.integral -= phase_increment_int.integral;
-    if ((phase.integral + phase_noise) < phase_increment_int.integral) {
-      data_.vw.formant_phase[0] = 0;
-      data_.vw.formant_phase[1] = 0;
-      data_.vw.formant_phase[2] = 0;
-    }
-    uint8_t x = S16ClipS8(4 * result) + 128;
-    *buffer++ = x;
-    *buffer++ = x;
-    size--;
-  END_SAMPLE_LOOP
-}
-
-// ------- Dirty Pwm (kills kittens) -----------------------------------------
-void Oscillator::RenderDirtyPwm(uint8_t* buffer) {
-  BEGIN_SAMPLE_LOOP
-    UPDATE_PHASE
-    *buffer++ = (phase.integral >> 8) < 127 + parameter_ ? 0 : 255;
-  END_SAMPLE_LOOP
-}
-
 // ------- Quad saw (mit aliasing) -------------------------------------------
 void Oscillator::RenderQuadSawPad(uint8_t* buffer) {
   uint16_t phase_spread = (
@@ -422,84 +213,34 @@ void Oscillator::RenderFilteredNoise(uint8_t* buffer) {
   data_.no.rng_state = rng_state;
 }
 
-// The position is freely determined by the parameter
-void Oscillator::RenderInterpolatedWavetable(uint8_t* buffer) {
-  // Which wavetable should we play?.
-  const prog_uint8_t* wavetable_definition = 
-      wav_res_wavetables + U8U8Mul(
-          shape_ - WAVEFORM_WAVETABLE_1,
-          18);
-  // Get a 8:8 value with the wave index in the first byte, and the
-  // balance amount in the second byte.
-  uint8_t num_steps = ResourcesManager::Lookup<uint8_t, uint8_t>(
-      wavetable_definition,
-      0);
-  uint16_t pointer = U8U8Mul(parameter_ << 1, num_steps);
-  uint16_t wave_index_1 = ResourcesManager::Lookup<uint8_t, uint8_t>(
-      wavetable_definition,
-      1 + (pointer >> 8));
-  uint16_t wave_index_2 = ResourcesManager::Lookup<uint8_t, uint8_t>(
-      wavetable_definition,
-      2 + (pointer >> 8));
-  uint8_t gain = pointer & 0xff;
-  const prog_uint8_t* wave_1 = wav_res_waves + U8U8Mul(
-      wave_index_1,
-      129);
-  const prog_uint8_t* wave_2 = wav_res_waves + U8U8Mul(
-      wave_index_2,
-      129);
-  BEGIN_SAMPLE_LOOP
-    UPDATE_PHASE_MORE_REGISTERS
-    *buffer++ = InterpolateTwoTables(
-        wave_1,
-        wave_2,
-        phase.integral >> 1,
-        ~gain,
-        gain);
-  END_SAMPLE_LOOP
-}
-
-// The position is freely determined by the parameter
-void Oscillator::RenderWavequence(uint8_t* buffer) {
-  const prog_uint8_t* wave = wav_res_waves + U8U8Mul(
-      parameter_,
-      129);
+// ------- Waveshaping synthesis ----------------------------------------
+void Oscillator::RenderWaveshape(uint8_t* buffer) {
   BEGIN_SAMPLE_LOOP
     UPDATE_PHASE
-    *buffer++ = InterpolateSample(wave, phase.integral >> 1);
+    // Generate a sine wave, then scale it by the parameter to control
+    // how hard we drive the waveshaper.
+    uint8_t sine = InterpolateSample(wav_res_sine, phase.integral);
+    // Scale the sine around center. Higher parameter = more drive.
+    int16_t driven = (static_cast<int16_t>(sine) - 128) *
+        (parameter_ + 1);
+    driven = (driven >> 6) + 128;
+    if (driven > 255) driven = 255;
+    if (driven < 0) driven = 0;
+    // Run through the distortion waveshaper table.
+    *buffer++ = ResourcesManager::Lookup<uint8_t, uint8_t>(
+        wav_res_distortion, static_cast<uint8_t>(driven));
   END_SAMPLE_LOOP
 }
 
 /* static */
 const Oscillator::RenderFn Oscillator::fn_table_[] PROGMEM = {
-  &Oscillator::RenderSilence,
-
-  &Oscillator::RenderSimpleWavetable,
-  &Oscillator::RenderBandlimitedPwm,
-  &Oscillator::RenderSimpleWavetable,
-  &Oscillator::RenderSimpleWavetable,
-
-  &Oscillator::RenderCzSaw,
-  &Oscillator::RenderCzResoSaw,
-  &Oscillator::RenderCzResoSaw,
-  &Oscillator::RenderCzResoSaw,
-  &Oscillator::RenderCzResoSaw,
-  &Oscillator::RenderCzResoPulse,
-  &Oscillator::RenderCzResoPulse,
-  &Oscillator::RenderCzResoPulse,
-  &Oscillator::RenderCzResoPulse,
-  &Oscillator::RenderCzResoTri,
-  
-  &Oscillator::RenderQuadSawPad,
-  
-  &Oscillator::RenderFm,
-  
-  &Oscillator::Render8BitLand,
-  &Oscillator::RenderDirtyPwm,
-  &Oscillator::RenderFilteredNoise,
-  &Oscillator::RenderVowel,
-  
-  &Oscillator::RenderInterpolatedWavetable
+  &Oscillator::RenderSilence,         // NONE
+  &Oscillator::RenderSimpleWavetable, // SAW
+  &Oscillator::RenderBandlimitedPwm,  // SQUARE
+  &Oscillator::RenderSimpleWavetable, // TRIANGLE
+  &Oscillator::RenderSimpleWavetable, // SINE
+  &Oscillator::RenderQuadSawPad,      // PAD
+  &Oscillator::RenderFilteredNoise,   // NOISE
 };
 
 }  // namespace

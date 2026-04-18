@@ -62,7 +62,7 @@ class NoteStack {
     // In case of saturation, remove the least recently played note from the
     // stack.
     if (size_ == capacity) {
-      uint8_t least_recent_note;
+      uint8_t least_recent_note = pool_[1].note;
       for (uint8_t i = 1; i <= capacity; ++i) {
         if (pool_[i].next_ptr == 0) {
           least_recent_note = pool_[i].note;
@@ -71,7 +71,7 @@ class NoteStack {
       NoteOff(least_recent_note);
     }
     // Now we are ready to insert the new note. Find a free slot to insert it.
-    uint8_t free_slot;
+    uint8_t free_slot = 1;
     for (uint8_t i = 1; i <= capacity; ++i) {
       if (pool_[i].note == kFreeSlot) {
         free_slot = i;
@@ -151,6 +151,9 @@ class NoteStack {
     return pool_[current];
   }
   const NoteEntry& played_note(uint8_t index) const {
+    if (size_ == 0) {
+      return pool_[0];
+    }
     uint8_t current = root_ptr_;
     index = size_ - index - 1;
     for (uint8_t i = 0; i < index; ++i) {

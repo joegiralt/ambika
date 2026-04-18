@@ -58,6 +58,9 @@ uint8_t Voice::osc2_buffer_[kAudioBlockSize];
 uint8_t Voice::sync_state_[kAudioBlockSize];
 uint8_t Voice::no_sync_[kAudioBlockSize];
 uint8_t Voice::dummy_sync_state_[kAudioBlockSize];
+Fm4Op Voice::fm4op_;
+KarplusStrong Voice::karplus_;
+WestCoast Voice::westcoast_;
 /* </static> */
 
 static const prog_Patch init_patch PROGMEM = {
@@ -150,10 +153,26 @@ void Voice::TriggerEnvelope(uint8_t index, uint8_t stage) {
 /* static */
 void Voice::Trigger(uint16_t note, uint8_t velocity, uint8_t legato) {
   pitch_target_ = note;
+
+  // Slop: per-note random pitch offset (patch_.padding[1]).
+  uint8_t slop = patch_.padding[1];
+  if (slop > 0) {
+    int8_t rnd = static_cast<int8_t>(Random::GetByte());
+    // Scale: slop=127 gives ±~8 units (about ±0.5 semitone).
+    int16_t offset = (static_cast<int16_t>(rnd) * slop) >> 8;
+    pitch_target_ += offset;
+  }
+
   if (!part_.legato || !legato) {
     gate_ = 255;
     TriggerEnvelope(ATTACK);
     transient_generator.Trigger();
+    if (patch_.osc[0].shape == WAVEFORM_KS_PLUCK) {
+      karplus_.Trigger(
+          patch_.osc[1].shape,      // excitation type
+          patch_.osc[1].parameter,  // excitation color
+          patch_.osc[1].detune);    // pluck position
+    }
     modulation_sources_[MOD_SRC_VELOCITY] = velocity;
     modulation_sources_[MOD_SRC_RANDOM] = Random::state_msb();
     osc_2.Reset();
@@ -329,18 +348,29 @@ inline void Voice::UpdateDestinations() {
   int8_t attack_mod = U15ShiftRight7(dst_[MOD_DST_ATTACK]) - 64;
   int8_t decay_mod = U15ShiftRight7(dst_[MOD_DST_DECAY]) - 64;
   int8_t release_mod = U15ShiftRight7(dst_[MOD_DST_RELEASE]) - 64;
+
+  // Envelope slop: per-voice random ADSR variation.
+  uint8_t slop = patch_.padding[1];
+  int8_t env_slop = 0;
+  if (slop > 0) {
+    env_slop = static_cast<int8_t>(
+        (static_cast<int16_t>(modulation_sources_[MOD_SRC_RANDOM]) - 128) *
+        slop) >> 8;
+  }
+
   for (int i = 0; i < kNumEnvelopes; ++i) {
     int16_t new_attack = patch_.env_lfo[i].attack;
-    new_attack = Clip(new_attack + attack_mod, 0, 127);
+    new_attack = Clip(new_attack + attack_mod + env_slop, 0, 127);
     int16_t new_decay = patch_.env_lfo[i].decay;
-    new_decay = Clip(new_decay + decay_mod, 0, 127);
+    new_decay = Clip(new_decay + decay_mod + env_slop, 0, 127);
     int16_t new_release = patch_.env_lfo[i].release;
-    new_release = Clip(new_release + release_mod, 0, 127);
+    new_release = Clip(new_release + release_mod + env_slop, 0, 127);
     envelope_[i].Update(
           new_attack,
           new_decay,
           patch_.env_lfo[i].sustain,
-          new_release);
+          new_release,
+          patch_.env_lfo[i].envelope_curve);
   }
   
   voice_lfo_.set_phase_increment(
@@ -362,14 +392,135 @@ inline void Voice::RenderOscillators() {
   // -0.5 / +0.5 semitones by the vibrato and pitch bend (fine).
   base_pitch += (dst_[MOD_DST_OSC_1_2_COARSE] - 8192) >> 4;
   base_pitch += (dst_[MOD_DST_OSC_1_2_FINE] - 8192) >> 7;
-  
+
+  // --- 4-op FM mode ---
+  if (patch_.osc[0].shape == WAVEFORM_FM4OP) {
+    uint16_t base_increment = ComputePhaseIncrement(base_pitch);
+
+    // Set up operator phase increments from patch fields.
+    // Op1: osc[0].range (coarse), osc[0].detune (fine)
+    fm4op_.SetOperatorIncrement(0, base_increment,
+        patch_.osc[0].range, patch_.osc[0].detune);
+    // Op2: osc[1].range (coarse), osc[1].detune (fine)
+    fm4op_.SetOperatorIncrement(1, base_increment,
+        patch_.osc[1].range, patch_.osc[1].detune);
+    // Op3: mix_balance (coarse), mix_op (fine)
+    fm4op_.SetOperatorIncrement(2, base_increment,
+        static_cast<int8_t>(patch_.mix_balance),
+        static_cast<int8_t>(patch_.mix_op));
+    // Op4: mix_parameter (coarse), mix_sub_osc_shape (fine)
+    fm4op_.SetOperatorIncrement(3, base_increment,
+        static_cast<int8_t>(patch_.mix_parameter),
+        static_cast<int8_t>(patch_.mix_sub_osc_shape));
+
+    // Extract operator waveforms from packed nibbles.
+    uint8_t op_waveform[4];
+    op_waveform[0] = patch_.osc[1].shape & 0x0F;
+    op_waveform[1] = (patch_.osc[1].shape >> 4) & 0x0F;
+    op_waveform[2] = patch_.osc[1].parameter & 0x0F;
+    op_waveform[3] = (patch_.osc[1].parameter >> 4) & 0x0F;
+    // Clamp to valid range.
+    for (uint8_t i = 0; i < 4; ++i) {
+      if (op_waveform[i] >= FM_WAVE_LAST) {
+        op_waveform[i] = FM_WAVE_SINE;
+      }
+    }
+
+    // Operator output levels.
+    uint8_t op_level[4];
+    op_level[0] = patch_.mix_sub_osc;
+    op_level[1] = patch_.mix_noise;
+    op_level[2] = patch_.mix_fuzz;
+    op_level[3] = patch_.mix_crush;
+
+    // Modulate total FM depth via PARAMETER_1 mod destination.
+    uint8_t depth_mod = U15ShiftRight7(dst_[MOD_DST_PARAMETER_1]);
+    for (uint8_t i = 0; i < 4; ++i) {
+      op_level[i] = U8U8MulShift8(op_level[i], depth_mod);
+    }
+
+    // Algorithm from osc[0].parameter.
+    uint8_t algorithm = patch_.osc[0].parameter;
+    if (algorithm >= FM_ALG_LAST) {
+      algorithm = FM_ALG_1;
+    }
+
+    // Feedback from padding[0].
+    uint8_t feedback = patch_.padding[0];
+
+    // Render into buffer.
+    fm4op_.Render(algorithm, op_waveform, op_level, feedback,
+                  base_increment, buffer_, kAudioBlockSize);
+
+    // Fill osc2 buffer with silence so the mixer doesn't add garbage.
+    memset(osc2_buffer_, 128, kAudioBlockSize);
+    return;
+  }
+
+  // --- Karplus-Strong mode ---
+  if (patch_.osc[0].shape == WAVEFORM_KS_PLUCK) {
+    int16_t ks_pitch = base_pitch + S8U8Mul(patch_.osc[0].range, 128)
+        + patch_.osc[0].detune;
+    uint16_t ks_increment = ComputePhaseIncrement(ks_pitch);
+    karplus_.SetPitch(ks_increment);
+
+    // KS parameters from patch fields.
+    uint8_t damping = U15ShiftRight7(dst_[MOD_DST_PARAMETER_1]);
+    uint8_t decay = patch_.osc[1].range;       // decay rate
+    uint8_t body = patch_.mix_balance;          // body resonance
+    // Page 2 params: ensemble + stiffness + feedback.
+    uint8_t ens_rate = patch_.mix_op;           // ensemble rate
+    uint8_t ens_depth = patch_.mix_parameter;   // ensemble depth
+    uint8_t ens_spread = patch_.mix_sub_osc_shape; // ensemble spread
+    uint8_t ens_mix = patch_.mix_sub_osc;       // ensemble wet/dry
+    uint8_t stiffness = patch_.mix_noise;       // string stiffness
+    uint8_t feedback = patch_.mix_fuzz;          // extra feedback
+    karplus_.Render(damping, decay, body,
+                    ens_rate, ens_depth, ens_spread, ens_mix,
+                    stiffness, feedback,
+                    buffer_, kAudioBlockSize);
+
+    memset(osc2_buffer_, 128, kAudioBlockSize);
+    return;
+  }
+
+  // --- West Coast mode ---
+  if (patch_.osc[0].shape == WAVEFORM_WESTCOAST) {
+    int16_t wc_pitch = base_pitch + S8U8Mul(patch_.osc[0].range, 128)
+        + patch_.osc[0].detune;
+    uint16_t wc_increment = ComputePhaseIncrement(wc_pitch);
+
+    uint8_t fold = U15ShiftRight7(dst_[MOD_DST_PARAMETER_1]);
+    uint8_t env_val = modulation_sources_[MOD_SRC_ENV_1];
+    westcoast_.Render(
+        patch_.osc[1].shape,           // base waveform (sin/tri)
+        fold,                           // fold depth (modulatable)
+        patch_.osc[1].parameter,       // symmetry
+        patch_.mix_balance,            // bias
+        patch_.osc[1].range,           // FM depth
+        patch_.osc[1].detune,          // FM ratio
+        patch_.mix_op,                 // drive
+        patch_.mix_parameter,          // color
+        patch_.mix_sub_osc_shape,      // fold stages
+        patch_.mix_sub_osc,            // input gain
+        patch_.mix_noise,              // env-to-fold
+        patch_.mix_fuzz,               // sub level
+        patch_.mix_crush,              // sync amount
+        env_val,                        // envelope value for env-to-fold
+        wc_increment,
+        buffer_,
+        kAudioBlockSize);
+
+    memset(osc2_buffer_, 128, kAudioBlockSize);
+    return;
+  }
+
+  // --- Normal oscillator rendering ---
   // Update the oscillator parameters.
   for (uint8_t i = 0; i < kNumOscillators; ++i) {
     int16_t pitch = base_pitch;
     // -36 / +36 semitones by the range controller.
-    if (patch_.osc[i].shape != WAVEFORM_FM) {
-      pitch += S8U8Mul(patch_.osc[i].range, 128);
-    }
+    pitch += S8U8Mul(patch_.osc[i].range, 128);
     // -1 / +1 semitones by the detune controller.
     pitch += patch_.osc[i].detune;
     // -16 / +16 semitones by the routed modulations.
@@ -437,12 +588,21 @@ void Voice::ProcessBlock() {
   }
 
   RenderOscillators();
+
+  uint8_t is_fm4op = (patch_.osc[0].shape == WAVEFORM_FM4OP);
+  uint8_t is_special = is_fm4op ||
+      (patch_.osc[0].shape == WAVEFORM_KS_PLUCK) ||
+      (patch_.osc[0].shape == WAVEFORM_WESTCOAST);
+
+  // In FM4OP mode, skip oscillator mixing and sub-osc (those patch fields
+  // are reinterpreted as FM parameters).
+  if (!is_special) {
   uint8_t op = patch_.mix_op;
   uint8_t osc_2_gain = U14ShiftRight6(dst_[MOD_DST_MIX_BALANCE]);
   uint8_t osc_1_gain = ~osc_2_gain;
   uint8_t wet_gain = U14ShiftRight6(dst_[MOD_DST_MIX_PARAM]);
   uint8_t dry_gain = ~wet_gain;
-  
+
   // Mix oscillators.
   switch (op) {
     case OP_RING_MOD:
@@ -507,33 +667,43 @@ void Voice::ProcessBlock() {
     sub_gain <<= 1;
     transient_generator.Render(patch_.mix_sub_osc_shape, buffer_, sub_gain);
   }
+  } // end if (!is_fm4op)
 
-  uint8_t noise = Random::state_msb();
-  uint8_t noise_gain = U15ShiftRight7(dst_[MOD_DST_MIX_NOISE]);
-  uint8_t signal_gain = ~noise_gain;
-  wet_gain = U14ShiftRight6(dst_[MOD_DST_MIX_FUZZ]);
-  dry_gain = ~wet_gain;
-  
-  // Mix with noise, and apply distortion. The loop processes samples by 2 to
-  // avoid some of the overhead of audio_buffer.Overwrite()
-  for (uint8_t i = 0; i < kAudioBlockSize;) {
-    uint8_t signal_noise_a, signal_noise_b;
-    noise = (noise * 73) + 1;
-    signal_noise_a = U8Mix(buffer_[i++], noise, signal_gain, noise_gain);
-    uint8_t a = U8Mix(
-        signal_noise_a,
-        ResourcesManager::Lookup<uint8_t, uint8_t>(
-            wav_res_distortion, signal_noise_a),
-        dry_gain, wet_gain);
+  // Post-mix processing.
+  if (is_special) {
+    // In FM4OP/KS mode, skip noise/fuzz post-processing.
+    // Write directly to audio buffer.
+    for (uint8_t i = 0; i < kAudioBlockSize; i += 2) {
+      audio_buffer.Overwrite2(buffer_[i], buffer_[i + 1]);
+    }
+  } else {
+    uint8_t noise = Random::state_msb();
+    uint8_t noise_gain = U15ShiftRight7(dst_[MOD_DST_MIX_NOISE]);
+    uint8_t signal_gain = ~noise_gain;
+    uint8_t post_wet = U14ShiftRight6(dst_[MOD_DST_MIX_FUZZ]);
+    uint8_t post_dry = ~post_wet;
 
-    noise = (noise * 73) + 1;
-    signal_noise_b = U8Mix(buffer_[i++], noise, signal_gain, noise_gain);
-    uint8_t b = U8Mix(
-          signal_noise_b,
+    // Mix with noise, and apply distortion. The loop processes samples by 2 to
+    // avoid some of the overhead of audio_buffer.Overwrite()
+    for (uint8_t i = 0; i < kAudioBlockSize;) {
+      uint8_t signal_noise_a, signal_noise_b;
+      noise = (noise * 73) + 1;
+      signal_noise_a = U8Mix(buffer_[i++], noise, signal_gain, noise_gain);
+      uint8_t a = U8Mix(
+          signal_noise_a,
           ResourcesManager::Lookup<uint8_t, uint8_t>(
-              wav_res_distortion, signal_noise_b),
-          dry_gain, wet_gain);
-    audio_buffer.Overwrite2(a, b);
+              wav_res_distortion, signal_noise_a),
+          post_dry, post_wet);
+
+      noise = (noise * 73) + 1;
+      signal_noise_b = U8Mix(buffer_[i++], noise, signal_gain, noise_gain);
+      uint8_t b = U8Mix(
+            signal_noise_b,
+            ResourcesManager::Lookup<uint8_t, uint8_t>(
+                wav_res_distortion, signal_noise_b),
+            post_dry, post_wet);
+      audio_buffer.Overwrite2(a, b);
+    }
   }
 }
 

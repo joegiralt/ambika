@@ -251,10 +251,10 @@ class Part {
   }
   
   uint8_t lfo_value(uint8_t index) const { return lfo_previous_values_[index]; }
-  uint8_t step(uint8_t index) const { return sequencer_step_[index]; }
 
   void Touch();
   void TouchPatch();
+  void WriteToAllVoices(uint8_t data_type, uint8_t address, uint8_t value);
   void UpdateLfos(uint8_t refresh_cycle);
   
   void AssignVoices(uint8_t allocation);
@@ -271,16 +271,13 @@ class Part {
   
   void RetriggerLfos();
   
-  // Called on each "tick" of the arpeggiator and sequencer clock.
-  void ClockSequencer();
+  // Called on each "tick" of the arpeggiator clock.
   void ClockArpeggiator();
   
   // Called whenever a new arpeggiator note has to be triggered.
   void StartArpeggio();
   void StepArpeggio();
   
-  void WriteToAllVoices(uint8_t data_type, uint8_t address, uint8_t value);
-   
   // Check whether a note should be played by this part. A note can be rejected
   // if it is outside of the split region, or if it is outside of the selected
   // scale/raga.
@@ -320,9 +317,6 @@ class Part {
   uint8_t data_entry_msb_;
   uint8_t nrpn_msb_;
   uint8_t nrpn_;
-  
-  // Sequencer state.
-  uint8_t sequencer_step_[kNumSequences];
   
   // Arpeggiator state.
   uint8_t previous_generated_note_;

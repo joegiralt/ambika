@@ -1,6 +1,4 @@
-// Copyright 2011 Emilie Gillet.
-//
-// Author: Emilie Gillet (emilie.o.gillet@gmail.com)
+// Copyright 2026 Ambika contributors.
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -15,46 +13,48 @@
 //
 // -----------------------------------------------------------------------------
 //
-// A page which allows up to 8 parameters to be tweaked.
+// Custom UI page for 4-op FM synthesis parameters.
 
-#ifndef CONTROLLER_UI_PAGES_PARAMETER_EDITOR_H_
-#define CONTROLLER_UI_PAGES_PARAMETER_EDITOR_H_
+#ifndef CONTROLLER_UI_PAGES_FM_PAGE_H_
+#define CONTROLLER_UI_PAGES_FM_PAGE_H_
 
 #include "controller/ui_pages/ui_page.h"
 
 namespace ambika {
 
-const static uint8_t kNumParametersPerPage = 8;
+// FM parameter definitions for each knob position.
+// Each entry: patch byte offset, min, max.
+struct FmParam {
+  uint8_t offset;
+  uint8_t min_value;
+  uint8_t max_value;
+};
 
-class ParameterEditor : public UiPage {
+class FmPage : public UiPage {
  public:
-  typedef DataTypeForSize<kNumParametersPerPage>::Type SnapMask;
+  FmPage() { }
 
-  ParameterEditor() { }
-  
   static void OnInit(PageInfo* info);
-  static void SetActiveControl(ActiveControl active_control);
-
   static uint8_t OnIncrement(int8_t increment);
+  static uint8_t OnClick();
   static uint8_t OnPot(uint8_t index, uint8_t value);
-  
+  static uint8_t OnKey(uint8_t key);
+
   static void UpdateScreen();
   static void UpdateLeds();
-  
-  // Return the parameter, part and instance indices for a given control. This
-  // adds a level of indirection allowing remappable knobs.
-  static uint8_t parameter_index(uint8_t control_id);
-  static uint8_t part_index(uint8_t control_id);
-  static uint8_t instance_index(uint8_t control_id);
-  
+
   static const prog_EventHandlers event_handlers_;
 
- private:
-  static SnapMask snapped_;
+  // Check if the active part's osc1 is set to FM4OP.
+  static uint8_t IsFm4OpActive();
 
-  DISALLOW_COPY_AND_ASSIGN(ParameterEditor);
+ private:
+  static void PrintFmValue(char* buffer, uint8_t value, uint8_t param_type);
+  static uint8_t page_index_;  // 0 = ops 1-2, 1 = ops 3-4
+
+  DISALLOW_COPY_AND_ASSIGN(FmPage);
 };
 
 }  // namespace ambika
 
-#endif  // CONTROLLER_UI_PAGES_PARAMETER_EDITOR_H_
+#endif  // CONTROLLER_UI_PAGES_FM_PAGE_H_

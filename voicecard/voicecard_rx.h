@@ -136,6 +136,9 @@ class VoicecardProtocolRx {
           // Stop doing anything else
           Timer<2>::Stop();
           uint8_t size = spi_.Read();
+          if (size > sizeof(Patch)) {
+            size = sizeof(Patch);
+          }
           uint8_t* data = data_ptr_ = voice.mutable_patch_data();
           while (size--) {
             *data++ = spi_.Read();

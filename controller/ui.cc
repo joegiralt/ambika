@@ -33,8 +33,11 @@
 #include "controller/ui_pages/library.h"
 #include "controller/ui_pages/os_info_page.h"
 #include "controller/ui_pages/parameter_editor.h"
+#include "controller/ui_pages/fm_page.h"
+#include "controller/ui_pages/ks_page.h"
+#include "controller/ui_pages/wc_page.h"
 #include "controller/ui_pages/performance_page.h"
-#include "controller/ui_pages/sequence_editor.h"
+#include "controller/ui_pages/randomizer.h"
 #include "controller/ui_pages/version_manager.h"
 #include "controller/ui_pages/voice_assigner.h"
 #include "controller/voicecard_tx.h"
@@ -62,13 +65,13 @@ const prog_PageInfo page_registry[] PROGMEM = {
   
   { PAGE_ENV_LFO,
     &ParameterEditor::event_handlers_,
-    { 24, 30, 31, 29, 25, 26, 27, 28 },
+    { 24, 30, 31, 73, 25, 26, 27, 28 },
     PAGE_VOICE_LFO, 2, 0xf0,
   },
-  
+
   { PAGE_VOICE_LFO,
     &ParameterEditor::event_handlers_,
-    { 0xff, 32, 33, 0xff, 0xff, 0xff, 0xff, 0xff },
+    { 0xff, 32, 33, 29, 0xff, 0xff, 0xff, 0xff },
     PAGE_ENV_LFO, 2, 0x0f,
   },
   
@@ -80,20 +83,14 @@ const prog_PageInfo page_registry[] PROGMEM = {
   
   { PAGE_PART,
     &ParameterEditor::event_handlers_,
-    { 42, 57, 47, 48, 43, 44, 45, 46 },
+    { 42, 57, 74, 48, 43, 44, 45, 46 },
     PAGE_PART_ARPEGGIATOR, 4, 0xf0,
   },
   
   { PAGE_PART_ARPEGGIATOR,
     &ParameterEditor::event_handlers_,
-    { 49, 50, 51, 52, 53, 54, 55, 56 },
-    PAGE_PART_SEQUENCER, 4, 0x0f,
-  },
-  
-  { PAGE_PART_SEQUENCER,
-    &SequenceEditor::event_handlers_,
-    { 0, 0, 0, 0, 0, 0, 0, 0 },
-    PAGE_PART, 4, 0xff,
+    { 49, 50, 51, 52, 53, 0xff, 0xff, 0xff },
+    PAGE_PART, 4, 0x0f,
   },
   
   { PAGE_MULTI,
@@ -117,7 +114,7 @@ const prog_PageInfo page_registry[] PROGMEM = {
   { PAGE_KNOB_ASSIGN,
     &KnobAssigner::event_handlers_,
     { 0, 0, 0, 0, 0, 0, 0, 0, },
-    PAGE_PERFORMANCE, 6, 0x0f,
+    PAGE_RANDOMIZER, 6, 0x0f,
   },
 
   { PAGE_LIBRARY,
@@ -130,6 +127,30 @@ const prog_PageInfo page_registry[] PROGMEM = {
     &VersionManager::event_handlers_,
     { 0, 0, 0, 0, 0, 0, 0, 0, },
     PAGE_LIBRARY, 8, 0xf0,
+  },
+
+  { PAGE_FM4OP,
+    &FmPage::event_handlers_,
+    { 0, 0, 0, 0, 0, 0, 0, 0, },
+    PAGE_FM4OP, 0, 0xf0,
+  },
+
+  { PAGE_KS_PLUCK,
+    &KsPage::event_handlers_,
+    { 0, 0, 0, 0, 0, 0, 0, 0, },
+    PAGE_KS_PLUCK, 0, 0xf0,
+  },
+
+  { PAGE_WESTCOAST,
+    &WcPage::event_handlers_,
+    { 0, 0, 0, 0, 0, 0, 0, 0, },
+    PAGE_WESTCOAST, 0, 0xf0,
+  },
+
+  { PAGE_RANDOMIZER,
+    &Randomizer::event_handlers_,
+    { 0, 0, 0, 0, 0, 0, 0, 0, },
+    PAGE_PERFORMANCE, 6, 0x0f,
   },
 
   { PAGE_SYSTEM_SETTINGS,
@@ -183,7 +204,7 @@ static char line[41];
 /* static */
 void Ui::Init() {
   memset(&state_, 0, sizeof(UiState));
-  memcpy_P(most_recent_page_in_group_, default_most_recent_page_in_group, 8);
+  memcpy_P(most_recent_page_in_group_, default_most_recent_page_in_group, 9);
 
   encoder_.Init();
   switches_.Init();
@@ -314,7 +335,40 @@ void Ui::DoEvents() {
         
       case CONTROL_ENCODER:
         if (e.control_id == 0) {
-          (*event_handlers_.OnIncrement)(e.value);
+          // Hold S1 + encoder = cycle synthesis mode.
+          // When S1 is held, Poll() multiplies increment by 8.
+          uint8_t s1_held = (e.value >= 8 || e.value <= -8);
+          if (s1_held && (
+              active_page_ == PAGE_OSCILLATORS ||
+              active_page_ == PAGE_FM4OP ||
+              active_page_ == PAGE_KS_PLUCK ||
+              active_page_ == PAGE_WESTCOAST)) {
+            // Cycle through modes: classic, fm4op, pluck, wcoast.
+            static const uint8_t modes[] PROGMEM = {
+              WAVEFORM_SAW, WAVEFORM_FM4OP,
+              WAVEFORM_KS_PLUCK, WAVEFORM_WESTCOAST
+            };
+            static const uint8_t pages[] PROGMEM = {
+              PAGE_OSCILLATORS, PAGE_FM4OP,
+              PAGE_KS_PLUCK, PAGE_WESTCOAST
+            };
+            uint8_t* patch = multi.mutable_part(
+                state_.active_part)->mutable_raw_patch_data();
+            uint8_t current = patch[0];
+            // Find current mode index.
+            int8_t idx = 0;
+            for (uint8_t m = 0; m < 4; ++m) {
+              if (current == pgm_read_byte(&modes[m])) { idx = m; break; }
+            }
+            idx += (e.value > 0) ? 1 : -1;
+            if (idx < 0) idx = 3;
+            if (idx > 3) idx = 0;
+            patch[0] = pgm_read_byte(&modes[idx]);
+            multi.mutable_part(state_.active_part)->TouchPatch();
+            ShowPage(static_cast<UiPageNumber>(pgm_read_byte(&pages[idx])));
+          } else {
+            (*event_handlers_.OnIncrement)(e.value);
+          }
         } else {
           int8_t new_part = state_.active_part + e.value;
           new_part = Clip(new_part, 0, kNumParts - 1);

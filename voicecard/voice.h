@@ -24,6 +24,9 @@
 #include "common/patch.h"
 
 #include "voicecard/envelope.h"
+#include "voicecard/fm4op.h"
+#include "voicecard/karplus.h"
+#include "voicecard/westcoast.h"
 
 namespace ambika {
 
@@ -32,6 +35,22 @@ static const int16_t kLowestNote = 0 * 128;
 static const int16_t kHighestNote = 120 * 128;
 static const int16_t kOctave = 12 * 128;
 static const int16_t kPitchTableStart = 116 * 128;
+
+static inline uint16_t ComputePhaseIncrement(int16_t pitch) {
+  if (pitch >= kHighestNote) pitch = kHighestNote;
+  int16_t ref_pitch = pitch - kPitchTableStart;
+  uint8_t num_shifts = 0;
+  while (ref_pitch < 0) {
+    ref_pitch += kOctave;
+    ++num_shifts;
+  }
+  uint16_t increment = ResourcesManager::Lookup<uint16_t, uint16_t>(
+      lut_res_oscillator_increments, ref_pitch >> 1);
+  while (num_shifts--) {
+    increment >>= 1;
+  }
+  return increment;
+}
 
 // This mirrors the beginning of the Part data structure in the controller.
 struct Part {
@@ -130,6 +149,10 @@ class Voice {
   static uint8_t sync_state_[kAudioBlockSize];
   static uint8_t no_sync_[kAudioBlockSize];
   static uint8_t dummy_sync_state_[kAudioBlockSize];
+
+  static Fm4Op fm4op_;
+  static KarplusStrong karplus_;
+  static WestCoast westcoast_;
 
   DISALLOW_COPY_AND_ASSIGN(Voice);
 };

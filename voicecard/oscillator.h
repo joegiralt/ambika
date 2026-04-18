@@ -53,14 +53,6 @@ static inline uint8_t InterpolateTwoTables(
 static const uint8_t kNumZonesFullSampleRate = 6;
 static const uint8_t kNumZonesHalfSampleRate = 5;
 
-struct VowelSynthesizerState {
-  uint16_t formant_increment[3];
-  uint16_t formant_phase[3];
-  uint8_t formant_amplitude[3];
-  uint8_t noise_modulation;
-  uint8_t update;  // Update only every kVowelControlRateDecimation-th call.
-};
-
 struct FilteredNoiseState {
   uint8_t lp_noise_sample;
   uint16_t rng_state;
@@ -72,10 +64,8 @@ struct QuadSawPadState {
 };
 
 union OscillatorState {
-  VowelSynthesizerState vw;
   FilteredNoiseState no;
   QuadSawPadState qs;
-  uint16_t secondary_phase;
 };
 
 typedef void (*OscRenderFn)(uint8_t* buffer);
@@ -110,17 +100,18 @@ class Oscillator {
       } else {
         RenderBandlimitedPwm(buffer);
       }
-    } else {
+    } else if (shape_ == WAVEFORM_WAVESHAPE) {
+      RenderWaveshape(buffer);
+    } else if (shape_ == WAVEFORM_FM4OP || shape_ == WAVEFORM_KS_PLUCK ||
+               shape_ == WAVEFORM_WESTCOAST) {
+      // Handled in voice.cc; render silence as fallback.
+      RenderSilence(buffer);
+    } else if (shape_ < WAVEFORM_LAST) {
       RenderFn fn;
-      
-      uint8_t index = shape_ >= WAVEFORM_WAVETABLE_1
-          ? WAVEFORM_WAVETABLE_1
-          : shape_;
-      ResourcesManager::Load(fn_table_, index, &fn);
-      if (shape_ == WAVEFORM_WAVEQUENCE) {
-        fn = &Oscillator::RenderWavequence;
-      }
+      ResourcesManager::Load(fn_table_, shape_, &fn);
       (this->*fn)(buffer);
+    } else {
+      RenderSilence(buffer);
     }
   }
   
@@ -162,18 +153,9 @@ class Oscillator {
   void RenderSilence(uint8_t* buffer);
   void RenderBandlimitedPwm(uint8_t* buffer);
   void RenderSimpleWavetable(uint8_t* buffer);
-  void RenderCzSaw(uint8_t* buffer);
-  void RenderCzResoSaw(uint8_t* buffer);
-  void RenderCzResoPulse(uint8_t* buffer);
-  void RenderCzResoTri(uint8_t* buffer);
-  void RenderFm(uint8_t* buffer);
-  void Render8BitLand(uint8_t* buffer);
-  void RenderVowel(uint8_t* buffer);
-  void RenderDirtyPwm(uint8_t* buffer);
   void RenderQuadSawPad(uint8_t* buffer);
   void RenderFilteredNoise(uint8_t* buffer);
-  void RenderInterpolatedWavetable(uint8_t* buffer);
-  void RenderWavequence(uint8_t* buffer);
+  void RenderWaveshape(uint8_t* buffer);
   
   DISALLOW_COPY_AND_ASSIGN(Oscillator);
 };

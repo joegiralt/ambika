@@ -57,6 +57,8 @@ static const prog_uint16_t units_definitions[UNIT_LAST] PROGMEM = {
   STR_RES_SWING,      // UNIT_GROOVE_TEMPLATE
   STR_RES_____,       // UNIT_MIDI_IN_MASK
   STR_RES_THRU,       // UNIT_MIDI_OUT_MODE
+  STR_RES_OMNI,       // UNIT_MIDI_CHANNEL
+  0,                  // UNIT_ENVELOPE_CURVE (handled as special case)
 };
 
 static const prog_char note_names[] PROGMEM = " CC# DD# E FF# GG# AA# B";
@@ -216,6 +218,43 @@ void Parameter::PrintValue(uint8_t value, char* buffer, uint8_t width) const {
       }
   }
   
+  // Envelope curve type.
+  if (unit == UNIT_ENVELOPE_CURVE) {
+    const prog_char* name;
+    switch (value) {
+      case ENVELOPE_CURVE_EXPONENTIAL: name = PSTR("exp"); break;
+      case ENVELOPE_CURVE_LINEAR: name = PSTR("lin"); break;
+      case ENVELOPE_CURVE_LOOP: name = PSTR("loop"); break;
+      case ENVELOPE_CURVE_LOOP_LINEAR: name = PSTR("lpln"); break;
+      default: name = PSTR("exp"); break;
+    }
+    strncpy_P(buffer, name, width);
+    AlignRight(buffer, width);
+    return;
+  }
+
+  // Carcosa waveform names.
+  if (unit == UNIT_OSCILLATOR_WAVEFORM) {
+    const prog_char* name;
+    switch (value) {
+      case WAVEFORM_NONE: name = PSTR("none"); break;
+      case WAVEFORM_SAW: name = PSTR("saw"); break;
+      case WAVEFORM_SQUARE: name = PSTR("square"); break;
+      case WAVEFORM_TRIANGLE: name = PSTR("triangle"); break;
+      case WAVEFORM_SINE: name = PSTR("sine"); break;
+      case WAVEFORM_QUAD_SAW_PAD: name = PSTR("pad"); break;
+      case WAVEFORM_FILTERED_NOISE: name = PSTR("noise"); break;
+      case WAVEFORM_FM4OP: name = PSTR("fm4op"); break;
+      case WAVEFORM_KS_PLUCK: name = PSTR("pluck"); break;
+      case WAVEFORM_WAVESHAPE: name = PSTR("wshape"); break;
+      case WAVEFORM_WESTCOAST: name = PSTR("wcoast"); break;
+      default: name = PSTR("?"); break;
+    }
+    strncpy_P(buffer, name, width);
+    AlignRight(buffer, width);
+    return;
+  }
+
   if (text) {
     ResourcesManager::LoadStringResource(text + value, buffer, width);
   } else if (unit != UNIT_NOTE) {
@@ -226,6 +265,11 @@ void Parameter::PrintValue(uint8_t value, char* buffer, uint8_t width) const {
 }
 
 void Parameter::PrintName(char* buffer, uint8_t width) const {
+  if (offset == PRM_PATCH_SLOP) {
+    strncpy_P(buffer, PSTR("slop"), width);
+    AlignLeft(buffer, width);
+    return;
+  }
   ResourceId caption = (width <= 6) ? short_name : long_name;
   ResourcesManager::LoadStringResource(caption, buffer, width);
   AlignLeft(buffer, width);
@@ -356,7 +400,7 @@ static const prog_Parameter parameters[kNumParameters] PROGMEM = {
   // 0
   { PARAMETER_LEVEL_PATCH,
     PRM_PATCH_OSC1_SHAPE,
-    UNIT_OSCILLATOR_WAVEFORM, WAVEFORM_NONE, WAVEFORM_LAST - 1,
+    UNIT_OSCILLATOR_WAVEFORM, WAVEFORM_NONE, WAVEFORM_FILTERED_NOISE,
     1, 0, 0xff, 16,
     STR_RES_WAVEFORM, STR_RES_WAVEFORM, STR_RES_OSCILLATOR_1 },
   
@@ -384,7 +428,7 @@ static const prog_Parameter parameters[kNumParameters] PROGMEM = {
   // 4
   { PARAMETER_LEVEL_PATCH,
     PRM_PATCH_OSC2_SHAPE,
-    UNIT_OSCILLATOR_WAVEFORM, WAVEFORM_NONE, WAVEFORM_LAST - 1,
+    UNIT_OSCILLATOR_WAVEFORM, WAVEFORM_NONE, WAVEFORM_FILTERED_NOISE,
     1, 0, 0xff, 18,
     STR_RES_WAVEFORM, STR_RES_WAVEFORM, STR_RES_OSCILLATOR_2 },
   
@@ -859,12 +903,26 @@ static const prog_Parameter parameters[kNumParameters] PROGMEM = {
     1, 0, 0xff, 0xff,
     STR_RES_LEDS, STR_RES_CARD_LEDS, STR_RES_SYSTEM },
   
-  // 71 2
+  // 72
   { PARAMETER_LEVEL_SYSTEM,
     PRM_SYSTEM_VOICECARD_SWAP_LEDS_COLORS,
     UNIT_BOOLEAN, 0, 1,
     1, 0, 0xff, 0xff,
     STR_RES_SWAP_COLORS, STR_RES_SWAP_COLORS, STR_RES_SYSTEM },
+
+  // 73 - envelope mode: exp, lin, loop, lpln
+  { PARAMETER_LEVEL_PATCH,
+    PRM_PATCH_ENV_CURVE,
+    UNIT_ENVELOPE_CURVE, 0, ENVELOPE_CURVE_LAST - 1,
+    3, 8, PRM_UI_ACTIVE_ENV_LFO, 0xff,
+    STR_RES_MODE, STR_RES_MODE, STR_RES_ENVELOPE },
+
+  // 74 - analog slop: per-note pitch/envelope randomization
+  { PARAMETER_LEVEL_PATCH,
+    PRM_PATCH_SLOP,
+    UNIT_RAW_UINT8, 0, 127,
+    1, 0, 0xff, 0xff,
+    STR_RES_NOISE, STR_RES_NOISE, STR_RES_MIXER },
 };
 
 /* static */

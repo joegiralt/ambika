@@ -67,25 +67,48 @@ class Envelope {
       uint8_t attack,
       uint8_t decay,
       uint8_t sustain,
-      uint8_t release) {
+      uint8_t release,
+      uint8_t curve = ENVELOPE_CURVE_EXPONENTIAL) {
+    linear_ = (curve == ENVELOPE_CURVE_LINEAR ||
+               curve == ENVELOPE_CURVE_LOOP_LINEAR);
+    looping_ = (curve == ENVELOPE_CURVE_LOOP ||
+                curve == ENVELOPE_CURVE_LOOP_LINEAR);
     stage_phase_increment_[ATTACK] = ResourcesManager::Lookup<
         uint16_t, uint8_t>(lut_res_env_portamento_increments, attack);
     stage_phase_increment_[DECAY] = ResourcesManager::Lookup<
         uint16_t, uint8_t>(lut_res_env_portamento_increments, decay);
     stage_phase_increment_[RELEASE] = ResourcesManager::Lookup<
         uint16_t, uint8_t>(lut_res_env_portamento_increments, release);
-    stage_target_[DECAY] = sustain << 1;
-    stage_target_[SUSTAIN] = stage_target_[DECAY];
+    if (looping_) {
+      // In loop mode, sustain sets the floor of the cycle.
+      stage_target_[DECAY] = sustain << 1;
+      stage_target_[SUSTAIN] = stage_target_[DECAY];
+    } else {
+      stage_target_[DECAY] = sustain << 1;
+      stage_target_[SUSTAIN] = stage_target_[DECAY];
+    }
   }
 
   uint8_t Render() {
     phase_ += phase_increment_;
     if (phase_ < phase_increment_) {
       value_ = U8MixU16(a_, b_, 255);
-      Trigger(++stage_);
+      uint8_t next_stage = stage_ + 1;
+      // In loop mode, retrigger attack after decay completes.
+      // Skip sustain — go straight from decay to attack.
+      if (looping_ && stage_ == DECAY) {
+        Trigger(ATTACK);
+      } else if (looping_ && stage_ == SUSTAIN) {
+        // Shouldn't reach here, but safety: retrigger.
+        Trigger(ATTACK);
+      } else {
+        Trigger(next_stage);
+      }
     }
     if (phase_increment_) {
-      uint8_t step = InterpolateSample(wav_res_env_expo, phase_);
+      uint8_t step = linear_
+          ? (phase_ >> 8)
+          : InterpolateSample(wav_res_env_expo, phase_);
       value_ = U8MixU16(a_, b_, step);
     }
     return value_ >> 8;
@@ -109,6 +132,10 @@ class Envelope {
 
   // Current value of the envelope.
   uint16_t value_;
+
+  // Envelope curve type.
+  uint8_t linear_;
+  uint8_t looping_;
 
   DISALLOW_COPY_AND_ASSIGN(Envelope);
 };

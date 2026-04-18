@@ -154,6 +154,12 @@ void Part::Touch() {
 }
 
 void Part::TouchPatch() {
+  // Sanitize waveform values — clamp out-of-range shapes from old patches.
+  for (uint8_t i = 0; i < kNumOscillators; ++i) {
+    if (patch_.osc[i].shape >= WAVEFORM_LAST) {
+      patch_.osc[i].shape = WAVEFORM_NONE;
+    }
+  }
   flags_ = FLAG_HAS_CHANGE;
   // Send an "enter block write" command to all voicecards.
   for (uint8_t i = 0; i < num_allocated_voices_; ++i) {
@@ -591,7 +597,6 @@ void Part::Clock() {
   ++midi_clock_counter_;
   if (midi_clock_counter_ >= midi_clock_prescaler_) {
     midi_clock_counter_ = 0;
-    ClockSequencer();
     ClockArpeggiator();
   }
   
@@ -615,7 +620,6 @@ void Part::Clock() {
 }
 
 void Part::Start() {
-  memset(sequencer_step_, 0, kNumSequences);
   memset(lfo_step_, 0, kNumLfos);
   midi_clock_counter_ = midi_clock_prescaler_;
   previous_generated_note_ = 0xff;
@@ -831,54 +835,6 @@ void Part::RetriggerLfos() {
     if (patch_.env_lfo[i].retrigger_mode == LFO_SYNC_MODE_SLAVE) {
       lfo_[i].set_phase(0);
       lfo_step_[i] = 0;
-    }
-  }
-}
-
-void Part::ClockSequencer() {
-  // Update the value of the sequencer in the modulation matrix.
-  for (uint8_t i = 0; i < 2; ++i) {
-    uint8_t value = data_.step_value(i, sequencer_step_[i]);
-    if (data_.sequence_length[i]) {
-      WriteToAllVoices(VOICECARD_DATA_MODULATION, MOD_SRC_SEQ_1 + i, value);
-    }
-  }
-  
-  // Trigger notes if there's a note sequence, and if a key is pressed on the
-  // keyboard.
-  if (data_.arp_sequencer_mode == ARP_SEQUENCER_MODE_NOTE && 
-      pressed_keys_.size() && data_.sequence_length[2]) {
-    NoteStep n = data_.note_step(sequencer_step_[2]);
-    uint8_t note = Clip(static_cast<int16_t>(n.note) + \
-        pressed_keys_.most_recent_note().note - 60, 0, 127);
-    if (!n.gate) {
-      // Just kill the previous note.
-      InternalNoteOff(previous_generated_note_);
-      previous_generated_note_ = 0xff;
-    } else {
-      if (!n.legato) {
-        // Kill the previous note and move to the new note.
-        InternalNoteOff(previous_generated_note_);
-        InternalNoteOn(note, n.velocity & 0x7f);
-      } else {
-        // Kill the previous note, but only after having started playing the
-        // new one.
-        if (previous_generated_note_ != note) {
-          InternalNoteOn(note, n.velocity & 0x7f);
-          InternalNoteOff(previous_generated_note_);
-        } else {
-          // Do nothing, this is just a note being held.
-        }
-      }
-      previous_generated_note_ = note;
-    }
-  }
-  
-  // Jump to the next step in the sequencer.
-  for (uint8_t i = 0; i < kNumSequences; ++i) {
-    ++sequencer_step_[i];
-    if (sequencer_step_[i] >= data_.sequence_length[i]) {
-      sequencer_step_[i] = 0;
     }
   }
 }

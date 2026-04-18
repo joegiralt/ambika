@@ -27,3 +27,13 @@
 
 # OS X crap
 .DS_Stor?
+
+# Build artifacts
+build/
+*.o
+*.elf
+*.hex
+*.bin
+*.syx
+*.mid
+__pycache__/
