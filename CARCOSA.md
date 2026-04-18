@@ -307,7 +307,7 @@ Set the envelope mode to `loop` or `lpln`. The envelope cycles attack → decay 
 They match the TX81Z: sine, half-sine, absolute sine, quarter sine, half-absolute, triple-absolute, pulse sine, and saw sine. All are derived from the existing sine table with zero extra flash cost.
 
 **Is this open source?**
-Yes. GPL v3.0, same as the original Ambika firmware. Fork it, modify it, share it.
+Yes, and it always will be. Carcosa exists because Emilie Gillet open-sourced the Ambika firmware. That firmware exists because of open-source AVR toolchains, open hardware designs, and a community that shares knowledge freely. We stand on the shoulders of giants. GPL v3.0 — fork it, modify it, improve it, share it. That's the deal.
 
 ---
 
