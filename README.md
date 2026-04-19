@@ -34,12 +34,14 @@ Step sequencer, CZ synthesis (9 variants), old 2-op FM, 8-bit land, dirty PWM, v
 
 ## Install
 
-Download `AMBIKA.BIN` and `VOICE.BIN` from the [releases page](https://github.com/joegiralt/ambika/releases).
+Download all 7 .BIN files from the [releases page](https://github.com/joegiralt/ambika/releases) and copy them to the root of your SD card.
 
-1. Copy `AMBIKA.BIN` to the root of your SD card
-2. Copy `VOICE.BIN` as `VOICE1.BIN` through `VOICE6.BIN`
-3. Hold **S8** during power-on to flash the controller
-4. Flash each voicecard from the OS info page with **S4**
+1. Hold **S8** during power-on to flash the controller (AMBIKA.BIN)
+2. Go to the OS info page, select each voicecard port (1-6), press **S4** to flash each
+
+Flash the controller first, then all 6 voicecards.
+
+For detailed instructions and recovery, see the [original Ambika firmware update guide](https://pichenettes.github.io/mutable-instruments-diy-archive/ambika/firmware/).
 
 To revert to stock Ambika firmware, place the original files on the SD card and reflash.
 
