@@ -1,4 +1,4 @@
-# Carcosa v1.5
+# Carcosa v1.6
 ## Custom firmware for the Ambika polysynth
 
 Carcosa replaces the stock Ambika firmware with a focused set of synthesis engines, expanded envelope capabilities, and a streamlined interface.
@@ -267,6 +267,99 @@ To revert to stock Ambika firmware, place the original `AMBIKA.BIN` and `VOICE*.
 ### Patch Compatibility
 
 Existing Ambika patches using saw, square, triangle, sine, pad, or noise will work unchanged. Patches using removed waveforms (CZ, wavetable, etc.) will have their oscillator shape reset to `none` on first load.
+
+---
+
+## MIDI CC Reference
+
+All synthesis modes respond to MIDI CCs. The special modes reuse existing patch byte offsets, so the same CC numbers control different parameters depending on the active mode.
+
+### Global (all modes)
+
+| CC | Parameter |
+|----|-----------|
+| 108 | FM feedback (fm4op mode) |
+| 109 | Slop |
+| 110 | Envelope curve (per active envelope) |
+
+### Classic Mode
+
+| CC | Parameter |
+|----|-----------|
+| 16 | Osc 1 waveform |
+| 17 | Osc 1 parameter |
+| 14 | Osc 1 range |
+| 15 | Osc 1 detune |
+| 18 | Osc 2 waveform |
+| 19 | Osc 2 parameter |
+| 20 | Osc 2 range |
+| 21 | Osc 2 detune |
+| 22 | Mix balance |
+| 23 | Mix operator |
+| 24 | Mix parameter |
+| 25 | Sub osc shape |
+| 26 | Sub osc level |
+| 27 | Noise level |
+| 12 | Fuzz |
+| 13 | Crush |
+| 3 | Filter cutoff |
+| 9 | Filter resonance |
+
+### 4-Op FM Mode
+
+| CC | FM parameter |
+|----|-------------|
+| 17 | Algorithm |
+| 108 | Feedback |
+| 18 | Op 1/2 waveform (packed) |
+| 19 | Op 3/4 waveform (packed) |
+| 14 | Op 1 ratio |
+| 15 | Op 1 fine |
+| 20 | Op 2 ratio |
+| 21 | Op 2 fine |
+| 22 | Op 3 ratio |
+| 23 | Op 3 fine |
+| 24 | Op 4 ratio |
+| 25 | Op 4 fine |
+| 26 | Op 1 level |
+| 27 | Op 2 level |
+| 12 | Op 3 level |
+| 13 | Op 4 level |
+
+### Karplus-Strong Mode
+
+| CC | KS parameter |
+|----|-------------|
+| 17 | Damping |
+| 19 | Excitation color |
+| 20 | Decay rate |
+| 21 | Pluck position |
+| 18 | Excitation type |
+| 22 | Body resonance |
+| 23 | Ensemble rate |
+| 24 | Ensemble depth |
+| 25 | Ensemble spread |
+| 26 | Ensemble mix |
+| 27 | Stiffness |
+| 12 | Extra feedback |
+
+### West Coast Mode
+
+| CC | WC parameter |
+|----|-------------|
+| 18 | Base waveform |
+| 17 | Fold depth |
+| 19 | Symmetry |
+| 22 | Bias |
+| 20 | FM depth |
+| 21 | FM ratio |
+| 24 | Color |
+| 23 | Drive |
+| 25 | Fold stages |
+| 26 | Input gain |
+| 27 | Env to fold |
+| 12 | Sub level |
+| 13 | Sync |
 
 ---
 

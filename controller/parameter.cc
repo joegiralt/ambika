@@ -337,7 +337,7 @@ static const prog_char midi_cc_map[128] PROGMEM = {
     28,  25, 255,  26, 255, 255,  44,  45,
    // 96-111
    255, 255, 255, 255, 255, 255,  49,  50,
-    51,  52,  53,  57, 255, 255, 255, 255,
+    51,  52,  53,  57,  75,  74,  73, 255,
    // 112-127
    255, 255, 255, 255, 255, 255, 255, 255,
    255, 255, 255, 255, 255, 255, 255, 255
@@ -923,6 +923,13 @@ static const prog_Parameter parameters[kNumParameters] PROGMEM = {
     UNIT_RAW_UINT8, 0, 127,
     1, 0, 0xff, 0xff,
     STR_RES_NOISE, STR_RES_NOISE, STR_RES_MIXER },
+
+  // 75 - FM feedback (padding[0], MIDI-only, not on any UI page)
+  { PARAMETER_LEVEL_PATCH,
+    104,
+    UNIT_RAW_UINT8, 0, 127,
+    1, 0, 0xff, 0xff,
+    STR_RES_AMOUNT, STR_RES_AMOUNT, STR_RES_MIXER },
 };
 
 /* static */
