@@ -460,12 +460,6 @@ inline void Voice::RenderOscillators() {
     op_level[2] = U8U8MulShift8(op_level[2], modulation_sources_[MOD_SRC_ENV_6]);
     op_level[3] = U8U8MulShift8(op_level[3], modulation_sources_[MOD_SRC_ENV_7]);
 
-    // Modulate total FM depth via PARAMETER_1 mod destination.
-    uint8_t depth_mod = U15ShiftRight7(dst_[MOD_DST_PARAMETER_1]);
-    for (uint8_t i = 0; i < 4; ++i) {
-      op_level[i] = U8U8MulShift8(op_level[i], depth_mod);
-    }
-
     // Algorithm from osc[0].parameter.
     uint8_t algorithm = patch_.osc[0].parameter;
     if (algorithm >= FM_ALG_LAST) {
