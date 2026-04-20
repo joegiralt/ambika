@@ -1,4 +1,4 @@
-# Carcosa v1.6
+# Carcosa v2.0
 ## Custom firmware for the Ambika polysynth
 
 Carcosa replaces the stock Ambika firmware with a focused set of synthesis engines, expanded envelope capabilities, and a streamlined interface.
@@ -178,7 +178,13 @@ All other pages (filter, envelope, modulation, part, arpeggiator, multi, perform
 
 ## Envelopes
 
-Each of the 3 envelopes has a selectable curve mode on the ENV/LFO page (knob 4, labeled `mode`):
+Carcosa has **7 envelopes**. Envelopes 1-3 have paired LFOs and curve selection (exponential, linear, looping). Envelopes 4-7 are simple ADSR — lightweight extra modulation sources for per-operator FM control, layered modulation, or any creative routing.
+
+The ENV/LFO page selector (knob 1) cycles through all 7 envelopes. When env 1-3 is selected, the top row shows LFO rate, shape, and envelope curve. When env 4-7 is selected, the top row is blank — just ADSR on the bottom row.
+
+All 7 envelopes are available as modulation sources in the mod matrix (env1 through env7).
+
+Envelopes 1-3 have a selectable curve mode (knob 4, labeled `mode`):
 
 | Mode | Behavior |
 |------|----------|
@@ -280,7 +286,11 @@ All synthesis modes respond to MIDI CCs. The special modes reuse existing patch 
 |----|-----------|
 | 108 | FM feedback (fm4op mode) |
 | 109 | Slop |
-| 110 | Envelope curve (per active envelope) |
+| 110 | Envelope curve (env 1-3 only) |
+| 111 | Extra envelope attack (env 4-7) |
+| 112 | Extra envelope decay (env 4-7) |
+| 113 | Extra envelope sustain (env 4-7) |
+| 114 | Extra envelope release (env 4-7) |
 
 ### Classic Mode
 
