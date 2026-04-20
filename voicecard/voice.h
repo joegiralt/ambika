@@ -74,6 +74,14 @@ class Voice {
   // Move this voice to the release stage.
   static void Kill() { TriggerEnvelope(DEAD); }
 
+  // Reset all synthesis engine state (called after bulk patch load).
+  static void ResetEngines() {
+    fm4op_.Init();
+    karplus_.Init();
+    westcoast_.Init();
+    last_engine_ = 0xFF;
+  }
+
   static void ProcessBlock();
 
   // Called whenever a write to the CV analog outputs has to be made.
