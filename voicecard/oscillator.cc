@@ -112,11 +112,15 @@ void Oscillator::RenderBandlimitedPwm(uint8_t* buffer) {
 // The position is determined by the note pitch, to prevent aliasing.
 
 void Oscillator::RenderSimpleWavetable(uint8_t* buffer) {
-  // Pure sine uses the 16-bit table for higher quality.
+  // Pure sine: use 16-bit table for clean output.
   if (shape_ == WAVEFORM_SINE) {
     BEGIN_SAMPLE_LOOP
       UPDATE_PHASE_MORE_REGISTERS
-      *buffer++ = InterpolateSine16(phase.integral) >> 8;
+      uint16_t index = phase.integral >> 7;
+      uint8_t frac = (phase.integral & 0x7F) << 1;
+      uint16_t a = pgm_read_word(&wav_res_sine16[index]);
+      uint16_t b = pgm_read_word(&wav_res_sine16[index + 1]);
+      *buffer++ = (a + ((static_cast<int32_t>(b - a) * frac) >> 8)) >> 8;
     END_SAMPLE_LOOP
     return;
   }
@@ -147,7 +151,6 @@ void Oscillator::RenderSimpleWavetable(uint8_t* buffer) {
       *buffer++ = sample;
     END_SAMPLE_LOOP
   } else {
-    // The waveshaper for the triangle is different.
     BEGIN_SAMPLE_LOOP
       UPDATE_PHASE_MORE_REGISTERS
       uint8_t sample = InterpolateTwoTables(
