@@ -167,6 +167,10 @@ void Randomizer::Randomize() {
       uint8_t base = 24 + env * 8;
       RandomizeRange(patch, base, base + 4, 0, 127, env_depth);  // ADSR
     }
+    for (uint8_t env = 0; env < 4; ++env) {
+      uint8_t base = 112 + env * 4;
+      RandomizeRange(patch, base, base + 4, 0, 127, env_depth);  // Extra env ADSR
+    }
   }
 
   // --- LFOs (within envelope blocks, offset 28-29, 36-37, 44-45) ---
