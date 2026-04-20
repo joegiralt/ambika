@@ -306,21 +306,21 @@ class Fm4Op {
     }
   }
 
-  // Set operator phase increment from a base increment and ratio.
+  // TX81Z frequency ratio table — 64 entries, 8.8 fixed-point.
+  // Coarse ratio byte (0-63) indexes into this table.
+  // Values: 0.50, 0.71, 0.78, 0.87, 1.00, 1.41, 1.57, 1.73, 2.00, ...
+  static const prog_uint16_t tx81z_ratios_[] PROGMEM;
+
+  // Set operator phase increment using TX81Z-style ratio lookup.
   void SetOperatorIncrement(uint8_t op_index, uint16_t base_increment,
-                            int8_t coarse_ratio, int8_t fine_detune) {
-    // Coarse ratio: map signed range to multiplier.
-    // 0 = 0.5x, 1 = 1x, 2 = 2x, etc. Negative values for sub-ratios.
-    uint16_t increment;
-    if (coarse_ratio <= 0) {
-      uint8_t shift = 1 - coarse_ratio;
-      if (shift > 15) shift = 15;
-      increment = base_increment >> shift;
-    } else if (coarse_ratio == 1) {
-      increment = base_increment;
-    } else {
-      increment = base_increment * static_cast<uint8_t>(coarse_ratio);
-    }
+                            uint8_t coarse_ratio, int8_t fine_detune) {
+    // Look up the ratio from the TX81Z table (8.8 fixed-point).
+    uint8_t idx = coarse_ratio & 0x3F;
+    uint16_t ratio_fp = ResourcesManager::Lookup<uint16_t, uint8_t>(
+        tx81z_ratios_, idx);
+    // Multiply base increment by ratio: (base * ratio) >> 8.
+    uint32_t product = static_cast<uint32_t>(base_increment) * ratio_fp;
+    uint16_t increment = product >> 8;
     // Fine detune: small pitch offset.
     if (fine_detune > 0) {
       increment += (increment >> 8) * fine_detune;

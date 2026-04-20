@@ -61,6 +61,18 @@ uint8_t Voice::dummy_sync_state_[kAudioBlockSize];
 Fm4Op Voice::fm4op_;
 KarplusStrong Voice::karplus_;
 WestCoast Voice::westcoast_;
+
+// TX81Z frequency ratios as 8.8 fixed-point (ratio × 256).
+const prog_uint16_t Fm4Op::tx81z_ratios_[] PROGMEM = {
+  128,  182,  200,  223,  256,  361,  402,  443,
+  512,  722,  768,  804,  886, 1024, 1085, 1206,
+ 1280, 1329, 1446, 1536, 1608, 1772, 1792, 1810,
+ 2010, 2048, 2171, 2214, 2304, 2412, 2532, 2560,
+ 2657, 2813, 2816, 2893, 3072, 3100, 3215, 3256,
+ 3328, 3543, 3584, 3610, 3617, 3840, 3981, 3986,
+ 4019, 4342, 4421, 4429, 4703, 4823, 4872, 5064,
+ 5225, 5315, 5427, 5627, 5757, 6029, 6200, 6643,
+};
 /* </static> */
 
 static const prog_Patch init_patch PROGMEM = {
@@ -412,20 +424,15 @@ inline void Voice::RenderOscillators() {
     uint16_t base_increment = ComputePhaseIncrement(base_pitch);
 
     // Set up operator phase increments from patch fields.
-    // Op1: osc[0].range (coarse), osc[0].detune (fine)
+    // Coarse ratio is a TX81Z-style index (0-63) into the ratio table.
     fm4op_.SetOperatorIncrement(0, base_increment,
-        patch_.osc[0].range, patch_.osc[0].detune);
-    // Op2: osc[1].range (coarse), osc[1].detune (fine)
+        static_cast<uint8_t>(patch_.osc[0].range), patch_.osc[0].detune);
     fm4op_.SetOperatorIncrement(1, base_increment,
-        patch_.osc[1].range, patch_.osc[1].detune);
-    // Op3: mix_balance (coarse), mix_op (fine)
+        static_cast<uint8_t>(patch_.osc[1].range), patch_.osc[1].detune);
     fm4op_.SetOperatorIncrement(2, base_increment,
-        static_cast<int8_t>(patch_.mix_balance),
-        static_cast<int8_t>(patch_.mix_op));
-    // Op4: mix_parameter (coarse), mix_sub_osc_shape (fine)
+        patch_.mix_balance, static_cast<int8_t>(patch_.mix_op));
     fm4op_.SetOperatorIncrement(3, base_increment,
-        static_cast<int8_t>(patch_.mix_parameter),
-        static_cast<int8_t>(patch_.mix_sub_osc_shape));
+        patch_.mix_parameter, static_cast<int8_t>(patch_.mix_sub_osc_shape));
 
     // Extract operator waveforms from packed nibbles.
     uint8_t op_waveform[4];
