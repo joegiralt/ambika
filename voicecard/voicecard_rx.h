@@ -147,6 +147,8 @@ class VoicecardProtocolRx {
           while (size--) {
             *data++ = spi_.Read();
           }
+          // Reset synthesis engine state after receiving a new patch.
+          voice.ResetEngines();
           Timer<2>::Start();
         }
         break;

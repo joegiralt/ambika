@@ -102,9 +102,8 @@ class Oscillator {
       }
     } else if (shape_ == WAVEFORM_WAVESHAPE) {
       RenderWaveshape(buffer);
-    } else if (shape_ == WAVEFORM_FM4OP || shape_ == WAVEFORM_KS_PLUCK ||
-               shape_ == WAVEFORM_WESTCOAST) {
-      // Handled in voice.cc; render silence as fallback.
+    } else if (shape_ >= WAVEFORM_FM4OP) {
+      // Special modes handled in voice.cc; render silence as fallback.
       RenderSilence(buffer);
     } else if (shape_ < WAVEFORM_LAST) {
       RenderFn fn;

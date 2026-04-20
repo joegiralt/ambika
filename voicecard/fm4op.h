@@ -26,6 +26,22 @@ using namespace avrlib;
 
 namespace ambika {
 
+// 16-bit sine table (512 entries + 1 wrap), defined in voice.cc.
+extern const prog_uint16_t wav_res_sine16[] PROGMEM;
+
+// 16-bit sine interpolation for FM — 512 entries, returns 0-65535.
+static inline uint16_t InterpolateSine16(uint16_t phase) {
+  // 9-bit index (512 entries), 7-bit fractional
+  uint16_t index = phase >> 7;
+  uint8_t frac = (phase << 1) & 0xFE;
+  uint16_t a = ResourcesManager::Lookup<uint16_t, uint16_t>(
+      wav_res_sine16, index);
+  uint16_t b = ResourcesManager::Lookup<uint16_t, uint16_t>(
+      wav_res_sine16, index + 1);
+  // Linear interpolation in 16-bit
+  return a + (static_cast<int32_t>(b - a) * frac >> 8);
+}
+
 // TX81Z waveform types derived from the sine table.
 enum FmWaveform {
   FM_WAVE_SINE,         // W1: Full sine
@@ -91,59 +107,84 @@ class Fm4Op {
     feedback_state_[1] = 0;
   }
 
-  // Compute the output of a single operator waveform.
+  // TX81Z-style exponential output level curve (upper 64 entries).
+  // Levels 0 = silence, 1-63 = 1 (near-silent), 64-127 from table.
+  static const prog_uint8_t level_to_amplitude_hi_[64] PROGMEM;
+
+  static inline uint8_t LevelToAmplitude(uint8_t level) {
+    if (level == 0) return 0;
+    if (level < 64) return 1;
+    return pgm_read_byte(&level_to_amplitude_hi_[level - 64]);
+  }
+
+  // Scale modulator output by its amplitude.
+  // Caller pre-applies exponential curve + envelope before passing amp.
+  // No shift — max mod index ~3.1 radians (8-bit ceiling).
+  static inline int16_t ScaleMod(uint8_t op_out, uint8_t amp) {
+    return static_cast<int16_t>(op_out - 128) * amp;
+  }
+
+  // Scale carrier output by its amplitude (maintains center at 128).
+  // Caller pre-applies exponential curve + envelope before passing amp.
+  static inline uint8_t ScaleCarrier(uint8_t op_out, uint8_t amp) {
+    return 128 + ((static_cast<int16_t>(op_out - 128) * amp) >> 8);
+  }
+
+  // Compute the output of a single operator waveform using 16-bit sine.
   static inline uint8_t RenderWaveform(uint8_t waveform, uint16_t phase) {
+    uint16_t s;
     switch (waveform) {
       case FM_WAVE_SINE:
       default:
-        return InterpolateSample(wav_res_sine, phase);
+        s = InterpolateSine16(phase);
+        break;
 
       case FM_WAVE_HALF_SINE:
-        if (phase < 0x8000) {
-          return InterpolateSample(wav_res_sine, phase << 1);
-        }
-        return 128;
+        s = (phase < 0x8000) ? InterpolateSine16(phase << 1) : 32768;
+        break;
 
       case FM_WAVE_ABS_SINE:
-        return InterpolateSample(wav_res_sine, (phase & 0x7FFF) << 1);
+        s = InterpolateSine16((phase & 0x7FFF) << 1);
+        break;
 
       case FM_WAVE_QUARTER_SINE:
-        if (phase < 0x4000) {
-          return InterpolateSample(wav_res_sine, phase << 2);
-        }
-        return 128;
+        s = (phase < 0x4000) ? InterpolateSine16(phase << 2) : 32768;
+        break;
 
       case FM_WAVE_HALF_ABS:
-        if (phase < 0x8000) {
-          return InterpolateSample(wav_res_sine, (phase & 0x3FFF) << 2);
-        }
-        return 128;
+        s = (phase < 0x8000) ? InterpolateSine16((phase & 0x3FFF) << 2) : 32768;
+        break;
 
       case FM_WAVE_TRIPLE_ABS:
         if (phase < 0x8000) {
           uint16_t tripled = static_cast<uint16_t>(phase * 3);
-          return InterpolateSample(wav_res_sine, (tripled & 0x7FFF) << 1);
+          s = InterpolateSine16((tripled & 0x7FFF) << 1);
+        } else {
+          s = 32768;
         }
-        return 128;
+        break;
 
       case FM_WAVE_PULSE_SINE: {
-        uint8_t val = InterpolateSample(wav_res_sine, (phase & 0x3FFF) << 2);
+        s = InterpolateSine16((phase & 0x3FFF) << 2);
         if (phase >= 0x8000) {
-          return 256 - val;
+          s = 65536 - s;
         }
-        return val;
+        break;
       }
 
       case FM_WAVE_SAW_SINE:
         if (phase < 0x4000) {
-          return InterpolateSample(wav_res_sine, phase << 2);
+          s = InterpolateSine16(phase << 2);
         } else if (phase < 0x8000) {
-          return 255;
+          s = 65535;
         } else if (phase < 0xC000) {
-          return InterpolateSample(wav_res_sine, phase << 2);
+          s = InterpolateSine16(phase << 2);
+        } else {
+          s = 0;
         }
-        return 0;
+        break;
     }
+    return s >> 8;  // Truncate to 8-bit at output only
   }
 
   // Render a block of FM4OP audio.
@@ -163,79 +204,73 @@ class Fm4Op {
         op_[i].phase += op_[i].phase_increment;
       }
 
-      // Apply feedback to op4 (same as TX81Z convention).
-      // Feedback state stored centered at 0 (signed).
-      int16_t fb = (feedback_state_[0] + feedback_state_[1]) >> 1;
-      int16_t fb_mod = (fb * static_cast<int16_t>(feedback)) >> 4;
+      // 16-bit feedback state for evolving, chaotic oscillation.
+      // Higher precision prevents the feedback loop from locking into
+      // a fixed repeating pattern (the TX81Z uses 14-bit internally).
+      int32_t fb = feedback_state_[0] + feedback_state_[1];
+      int32_t fb_mod = (fb * feedback) >> 6;
 
-      uint8_t op4_out = RenderWaveform(op_waveform[3],
-          op_[3].phase + static_cast<uint16_t>(fb_mod));
-      // Store centered at 0 for proper signed feedback.
+      // Render op4 waveform, store 16-bit precision for feedback path.
+      uint16_t op4_phase = op_[3].phase + static_cast<uint16_t>(fb_mod);
+      uint16_t op4_raw = InterpolateSine16(op4_phase);
+      uint8_t op4_out = RenderWaveform(op_waveform[3], op4_phase);
       feedback_state_[1] = feedback_state_[0];
-      feedback_state_[0] = static_cast<int8_t>(op4_out - 128);
+      feedback_state_[0] = static_cast<int16_t>(op4_raw - 32768);
 
       // Render remaining operators and route per algorithm.
+      // Carrier outputs are scaled by their level (per-op envelope control).
       uint8_t out;
       switch (algorithm) {
         case FM_ALG_1: {
-          // 4->3->2->1->out (full serial)
-          int16_t mod3 = static_cast<int16_t>(op4_out - 128) *
-              op_level[3];
+          // 4->3->2->1->out (single carrier, VCA handles volume)
+          int16_t mod3 = ScaleMod(op4_out, op_level[3]);
           uint8_t op3_out = RenderWaveform(op_waveform[2],
               op_[2].phase + mod3);
-          int16_t mod2 = static_cast<int16_t>(op3_out - 128) *
-              op_level[2];
+          int16_t mod2 = ScaleMod(op3_out, op_level[2]);
           uint8_t op2_out = RenderWaveform(op_waveform[1],
               op_[1].phase + mod2);
-          int16_t mod1 = static_cast<int16_t>(op2_out - 128) *
-              op_level[1];
+          int16_t mod1 = ScaleMod(op2_out, op_level[1]);
           out = RenderWaveform(op_waveform[0],
               op_[0].phase + mod1);
           break;
         }
 
         case FM_ALG_2: {
-          // (3+4)->2->1->out
+          // (3+4)->2->1->out (single carrier)
           uint8_t op3_out = RenderWaveform(op_waveform[2],
               op_[2].phase);
-          int16_t mod2 = (static_cast<int16_t>(op4_out - 128) *
-              op_level[3]) +
-              (static_cast<int16_t>(op3_out - 128) * op_level[2]);
+          int16_t mod2 = ScaleMod(op4_out, op_level[3]) +
+              ScaleMod(op3_out, op_level[2]);
           uint8_t op2_out = RenderWaveform(op_waveform[1],
               op_[1].phase + mod2);
-          int16_t mod1 = static_cast<int16_t>(op2_out - 128) *
-              op_level[1];
+          int16_t mod1 = ScaleMod(op2_out, op_level[1]);
           out = RenderWaveform(op_waveform[0],
               op_[0].phase + mod1);
           break;
         }
 
         case FM_ALG_3: {
-          // (4->3) + 2 -> 1->out
-          int16_t mod3 = static_cast<int16_t>(op4_out - 128) *
-              op_level[3];
+          // (4->3) + 2 -> 1->out (single carrier)
+          int16_t mod3 = ScaleMod(op4_out, op_level[3]);
           uint8_t op3_out = RenderWaveform(op_waveform[2],
               op_[2].phase + mod3);
           uint8_t op2_out = RenderWaveform(op_waveform[1],
               op_[1].phase);
-          int16_t mod1 = (static_cast<int16_t>(op3_out - 128) *
-              op_level[2]) +
-              (static_cast<int16_t>(op2_out - 128) * op_level[1]);
+          int16_t mod1 = ScaleMod(op3_out, op_level[2]) +
+              ScaleMod(op2_out, op_level[1]);
           out = RenderWaveform(op_waveform[0],
               op_[0].phase + mod1);
           break;
         }
 
         case FM_ALG_4: {
-          // (4->3) + (2->1) -> out (two parallel pairs)
-          int16_t mod3 = static_cast<int16_t>(op4_out - 128) *
-              op_level[3];
+          // (4->3) + (2->1) -> out (2 carriers)
+          int16_t mod3 = ScaleMod(op4_out, op_level[3]);
           uint8_t op3_out = RenderWaveform(op_waveform[2],
               op_[2].phase + mod3);
           uint8_t op2_out = RenderWaveform(op_waveform[1],
               op_[1].phase);
-          int16_t mod1 = static_cast<int16_t>(op2_out - 128) *
-              op_level[1];
+          int16_t mod1 = ScaleMod(op2_out, op_level[1]);
           uint8_t op1_out = RenderWaveform(op_waveform[0],
               op_[0].phase + mod1);
           out = (op1_out >> 1) + (op3_out >> 1);
@@ -243,17 +278,14 @@ class Fm4Op {
         }
 
         case FM_ALG_5: {
-          // (4->2) + (4->3->1) -> out
-          int16_t mod3 = static_cast<int16_t>(op4_out - 128) *
-              op_level[3];
+          // (4->3->1) + (4->2) -> out (2 carriers)
+          int16_t mod3 = ScaleMod(op4_out, op_level[3]);
           uint8_t op3_out = RenderWaveform(op_waveform[2],
               op_[2].phase + mod3);
-          int16_t mod1 = static_cast<int16_t>(op3_out - 128) *
-              op_level[2];
+          int16_t mod1 = ScaleMod(op3_out, op_level[2]);
           uint8_t op1_out = RenderWaveform(op_waveform[0],
               op_[0].phase + mod1);
-          int16_t mod2 = static_cast<int16_t>(op4_out - 128) *
-              op_level[3];
+          int16_t mod2 = ScaleMod(op4_out, op_level[3]);
           uint8_t op2_out = RenderWaveform(op_waveform[1],
               op_[1].phase + mod2);
           out = (op1_out >> 1) + (op2_out >> 1);
@@ -261,30 +293,28 @@ class Fm4Op {
         }
 
         case FM_ALG_6: {
-          // 4->(1+2+3)->out (one mod, three carriers)
-          int16_t mod = static_cast<int16_t>(op4_out - 128) *
-              op_level[3];
+          // 4->(1+2+3)->out (3 carriers, VCA handles volume)
+          int16_t mod = ScaleMod(op4_out, op_level[3]);
           uint8_t op1_out = RenderWaveform(op_waveform[0],
               op_[0].phase + mod);
           uint8_t op2_out = RenderWaveform(op_waveform[1],
               op_[1].phase + mod);
           uint8_t op3_out = RenderWaveform(op_waveform[2],
               op_[2].phase + mod);
-          out = (op1_out / 3) + (op2_out / 3) + (op3_out / 3);
+          out = (op1_out >> 2) + (op2_out >> 2) + (op3_out >> 2) + 32;
           break;
         }
 
         case FM_ALG_7: {
-          // (4->1)+2+3->out
-          int16_t mod1 = static_cast<int16_t>(op4_out - 128) *
-              op_level[3];
+          // (4->1)+2+3->out (3 carriers)
+          int16_t mod1 = ScaleMod(op4_out, op_level[3]);
           uint8_t op1_out = RenderWaveform(op_waveform[0],
               op_[0].phase + mod1);
           uint8_t op2_out = RenderWaveform(op_waveform[1],
               op_[1].phase);
           uint8_t op3_out = RenderWaveform(op_waveform[2],
               op_[2].phase);
-          out = (op1_out / 3) + (op2_out / 3) + (op3_out / 3);
+          out = (op1_out >> 2) + (op2_out >> 2) + (op3_out >> 2) + 32;
           break;
         }
 
@@ -306,21 +336,21 @@ class Fm4Op {
     }
   }
 
-  // Set operator phase increment from a base increment and ratio.
+  // TX81Z frequency ratio table — 64 entries, 8.8 fixed-point.
+  // Coarse ratio byte (0-63) indexes into this table.
+  // Values: 0.50, 0.71, 0.78, 0.87, 1.00, 1.41, 1.57, 1.73, 2.00, ...
+  static const prog_uint16_t tx81z_ratios_[] PROGMEM;
+
+  // Set operator phase increment using TX81Z-style ratio lookup.
   void SetOperatorIncrement(uint8_t op_index, uint16_t base_increment,
-                            int8_t coarse_ratio, int8_t fine_detune) {
-    // Coarse ratio: map signed range to multiplier.
-    // 0 = 0.5x, 1 = 1x, 2 = 2x, etc. Negative values for sub-ratios.
-    uint16_t increment;
-    if (coarse_ratio <= 0) {
-      uint8_t shift = 1 - coarse_ratio;
-      if (shift > 15) shift = 15;
-      increment = base_increment >> shift;
-    } else if (coarse_ratio == 1) {
-      increment = base_increment;
-    } else {
-      increment = base_increment * static_cast<uint8_t>(coarse_ratio);
-    }
+                            uint8_t coarse_ratio, int8_t fine_detune) {
+    // Look up the ratio from the TX81Z table (8.8 fixed-point).
+    uint8_t idx = coarse_ratio & 0x3F;
+    uint16_t ratio_fp = ResourcesManager::Lookup<uint16_t, uint8_t>(
+        tx81z_ratios_, idx);
+    // Multiply base increment by ratio: (base * ratio) >> 8.
+    uint32_t product = static_cast<uint32_t>(base_increment) * ratio_fp;
+    uint16_t increment = product >> 8;
     // Fine detune: small pitch offset.
     if (fine_detune > 0) {
       increment += (increment >> 8) * fine_detune;
@@ -334,7 +364,7 @@ class Fm4Op {
 
  private:
   FmOperator op_[4];
-  int8_t feedback_state_[2];
+  int16_t feedback_state_[2];
 
   DISALLOW_COPY_AND_ASSIGN(Fm4Op);
 };

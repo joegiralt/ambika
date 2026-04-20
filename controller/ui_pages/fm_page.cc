@@ -328,18 +328,19 @@ void FmPage::UpdateScreen() {
       }
 
       case FM_PT_RATIO: {
-        // Display as ratio value. 0=0.5, 1=1.0, 2=2.0, etc.
-        int8_t r = static_cast<int8_t>(raw);
-        if (r <= 0) {
-          buffer[6] = '0';
-          buffer[7] = '.';
-          buffer[8] = '5';
-          buffer[9] = ' ';
-        } else {
-          UnsafeItoa<int16_t>(r, 3, &buffer[6]);
-          AlignRight(&buffer[6], 3);
-          buffer[9] = ' ';
-        }
+        // TX81Z ratio display. Index 0-63 maps to ratio table.
+        // Show as X.XX with one decimal for compact display.
+        static const prog_char ratio_display[] PROGMEM =
+            ".50 " ".71 " ".78 " ".87 " "1.0 " "1.41" "1.57" "1.73"
+            "2.0 " "2.82" "3.0 " "3.14" "3.46" "4.0 " "4.24" "4.71"
+            "5.0 " "5.19" "5.65" "6.0 " "6.28" "6.92" "7.0 " "7.07"
+            "7.85" "8.0 " "8.48" "8.65" "9.0 " "9.42" "9.89" "10.0"
+            "10.4" "11.0" "11.0" "11.3" "12.0" "12.1" "12.6" "12.7"
+            "13.0" "13.8" "14.0" "14.1" "14.1" "15.0" "15.6" "15.6"
+            "15.7" "17.0" "17.3" "17.3" "18.4" "18.8" "19.0" "19.8"
+            "20.4" "20.8" "21.2" "22.0" "22.5" "23.6" "24.2" "26.0";
+        uint8_t idx = raw & 0x3F;
+        memcpy_P(&buffer[6], ratio_display + idx * 4, 4);
         break;
       }
 

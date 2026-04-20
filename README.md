@@ -14,9 +14,9 @@ Carcosa is a custom firmware for the [Mutable Instruments Ambika](https://pichen
 | saw, square, triangle, sine | Classic dual-oscillator subtractive (unchanged) |
 | pad | 4-voice detuned supersaw |
 | noise | Filtered noise with variable color |
-| fm4op | 4-operator FM with 8 TX81Z algorithms and 8 waveforms per operator |
-| pluck | Karplus-Strong with 3-read-head ensemble, variable stiffness, 4 excitation types |
-| wcoast | Buchla-style wavefolder with variable fold stages, FM, self-sync, sub oscillator |
+| fm4op | 4-operator FM with 8 TX81Z algorithms, 8 waveforms, exponential levels, 16-bit feedback |
+| pluck | Karplus-Strong with IIR damping, 3-head ensemble chorus, stiffness, 4 excitation types |
+| wcoast | Buchla-style wavefolder (16+ folds), 2-pole color filter, FM, self-sync, sub oscillator |
 | wshape | Waveshaping through nonlinear transfer function |
 
 ### Additional Features

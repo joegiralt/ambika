@@ -37,6 +37,14 @@ struct FilterSettings {
   uint8_t mode;
 };
 
+enum SynthEngine {
+  ENGINE_CLASSIC,
+  ENGINE_FM4OP,
+  ENGINE_KS_PLUCK,
+  ENGINE_WESTCOAST,
+  ENGINE_LAST
+};
+
 enum EnvelopeCurve {
   ENVELOPE_CURVE_EXPONENTIAL,
   ENVELOPE_CURVE_LINEAR,
@@ -54,13 +62,6 @@ struct EnvelopeLfoSettings {
   uint8_t rate;
   uint8_t envelope_curve;
   uint8_t retrigger_mode;
-};
-
-struct ExtraEnvelopeSettings {
-  uint8_t attack;
-  uint8_t decay;
-  uint8_t sustain;
-  uint8_t release;
 };
 
 struct Modulation {
@@ -284,8 +285,8 @@ struct Patch {
   // Offset: 104-112
   uint8_t padding[8];
 
-  // Offset: 112-128
-  ExtraEnvelopeSettings extra_env[kNumExtraEnvelopes];
+  // Offset: 112-144
+  EnvelopeLfoSettings extra_env_lfo[kNumExtraEnvelopes];
 };
 
 typedef Patch PROGMEM prog_Patch;

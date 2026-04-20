@@ -1,4 +1,4 @@
-# Carcosa v2.0
+# Carcosa v2.05
 ## Custom firmware for the Ambika polysynth
 
 Carcosa replaces the stock Ambika firmware with a focused set of synthesis engines, expanded envelope capabilities, and a streamlined interface.
@@ -76,6 +76,10 @@ TX81Z-style frequency modulation with 4 operators.
 
 **Operator waveforms:** sin, half, abs, qtr, habs, tri, pls, saw
 
+**Modulation depth:** Operator levels use a TX81Z-style exponential curve (0.75 dB/step). Level 0 = silence, 64 = barely audible, 100 = moderate, 127 = full. The useful modulation range is 90-127. Per-operator envelopes (env 4-7) multiply the level after the exponential curve, matching the TX81Z signal chain.
+
+**Feedback:** 16-bit internal state creates evolving, non-repeating oscillation (similar to the TX81Z's 14-bit feedback dynamics). Higher values add saw-like harmonics to operator 4.
+
 The mod matrix destination `prm1` controls total FM depth and can be modulated by envelopes/LFOs for dynamic timbral control.
 
 #### Karplus-Strong (pluck)
@@ -103,10 +107,10 @@ Physical model of a plucked string. A noise burst excites a tuned delay line wit
 | 2 | dpth | 0-127 | Ensemble depth (3 read heads from same delay) |
 | 3 | sprd | 0-127 | Ensemble spread (phase offset between heads) |
 | 4 | wmix | 0-127 | Ensemble wet/dry mix |
-| 5 | stif | 0-127 | String stiffness (inharmonic partials, bell-like) |
-| 6 | feed | 0-127 | Extra feedback (longer sustain, self-oscillation) |
+| 5 | stif | 0-127 | String stiffness (inharmonic partials, scales with pitch) |
+| 6 | feed | 0-127 | Sustain (reduces damping loss for longer ring, never self-oscillates) |
 
-The `prm1` mod destination controls damping and can be modulated for expressive playing.
+**Damping** uses an IIR low-pass filter that sweeps from bright metallic ring (0) to dark muted thud (127). The `prm1` mod destination controls damping and can be modulated for expressive playing.
 
 #### West Coast (wcoast)
 
@@ -129,13 +133,15 @@ Buchla-style wavefolder with built-in FM and sub-oscillator.
 
 | Knob | Label | Range | Description |
 |------|-------|-------|-------------|
-| 1 | flds | 0-127 | Number of fold stages (1-6) |
+| 1 | flds | 0-127 | Fold character (additional harmonic shaping) |
 | 2 | gain | 0-127 | Input gain before folding |
 | 3 | env | 0-127 | Envelope-to-fold depth (timbral VCA) |
 | 4 | sub | 0-127 | Sub-oscillator level (one octave down) |
 | 5 | sync | 0-127 | Self-sync amount (metallic tones) |
 
-Route an envelope to `prm1` (fold depth) for the classic west coast behavior where timbre and amplitude are linked.
+**Wavefolder** uses a quadratic gain curve (1x at fold=0, 33x at fold=127) creating up to 16 folds — matching real Buchla 259 harmonic density. The **color** filter is a 2-pole IIR (12dB/oct) that sweeps from dark fundamental-only to bright full harmonics.
+
+Route an envelope to `prm1` (fold depth) for the classic west coast behavior where timbre and amplitude are linked. The `env` parameter on page 2 does this directly — the signature Buchla pluck sound.
 
 #### Waveshaping (wshape)
 
@@ -259,8 +265,8 @@ To revert to stock Ambika firmware, place the original `AMBIKA.BIN` and `VOICE*.
 
 | | Voicecard (ATmega328p) | Controller (ATmega644p) |
 |---|---|---|
-| Flash | 29,806 / 32,256 (92%) | 57,504 / 61,440 (94%) |
-| RAM | 1,458 / 2,048 (71%) | 3,828 / 4,096 (93%) |
+| Flash | 32,228 / 32,256 (99.9%) | ~60,000 / 65,536 (91%) |
+| RAM | 1,521 / 2,048 (74%) | ~3,900 / 4,096 (95%) |
 
 ### Changes from Stock Ambika
 

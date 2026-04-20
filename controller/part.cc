@@ -37,12 +37,12 @@ static const prog_uint16_t lfo_phase_increment_per_clock_tick[15] PROGMEM = {
 };
 
 static const prog_Patch init_patch PROGMEM = {
-  // Oscillators
-  WAVEFORM_SAW, 0, 0, 0,
-  WAVEFORM_SQUARE, 32, -12, 12,
-  
-  // Mixer
-  32, OP_SUM, 31, WAVEFORM_SUB_OSC_SQUARE_1, 0, 0, 0, 0, 
+  // Oscillators (FM mode: algo, ratios, waveforms packed)
+  WAVEFORM_SAW, 1, 4, 0,     // osc0: shape=SAW(fallback), param=algo1, range=R_100, det=0
+  0, 0, 4, 0,                // osc1: wav1|wav2=0(sine), wav3|wav4=0, range=R_100, det=0
+
+  // Mixer (FM mode: ratios, levels)
+  4, 0, 4, 0, 127, 120, 115, 112,
 
   // Filter
   96, 0, 0, 0, 0, 0, 24, 0,
@@ -76,66 +76,34 @@ static const prog_Patch init_patch PROGMEM = {
   MOD_SRC_LFO_3, MOD_SRC_ENV_4, 0,
   MOD_SRC_ENV_4, MOD_SRC_ENV_5, 0,
   
-  // Padding
-  0, 0, 0, 0, 0, 0, 0, 0,
+  // Padding: [0]=feedback, [1]=unused, [2]=engine (1=FM), [3-7]=unused
+  0, 0, ENGINE_FM4OP, 0, 0, 0, 0, 0,
 
-  // Extra envelopes (env4-7 ADSR: attack, decay, sustain, release)
-  0, 40, 20, 60,
-  0, 40, 20, 60,
-  0, 40, 20, 60,
-  0, 40, 20, 60,
+  // Extra envelope-LFO settings (env4-7: ADSR + LFO shape/rate/curve/retrigger)
+  0, 40, 20, 60, LFO_WAVEFORM_TRIANGLE, 0, 0, 0,
+  0, 40, 20, 60, LFO_WAVEFORM_TRIANGLE, 0, 0, 0,
+  0, 40, 20, 60, LFO_WAVEFORM_TRIANGLE, 0, 0, 0,
+  0, 40, 20, 60, LFO_WAVEFORM_TRIANGLE, 0, 0, 0,
 };
 
 static const prog_PartData init_part PROGMEM = {
   // Volume
   120,
-  
+
   // Octave and tuning
   0, 0, 0, 0,
-  
+
   // Legato, portamento, seq mode
   0, 0, 0,
-  
+
   // Arp data
   0, 1, 0, 10,
-  
-  // Sequence length
-  16,
-  16,
-  16,
-  POLY,
-  
-  // Step sequence 1
-  0xff, 0xff, 0x80, 0x80, 0xcc, 0xcc, 0x20, 0x20,
-  0x00, 0x20, 0x40, 0x60, 0x80, 0xa0, 0xc0, 0xff,
 
-  // Step sequence 1
-  0x00, 0x10, 0x20, 0x40, 0x80, 0xff, 0x80, 0x40,
-  0x20, 0x20, 0x20, 0x20, 0x00, 0x00, 0x80, 0x40,
-  
-  // Note sequence
-  60 | 0x80, 100,
-  60, 100,
-  48 | 0x80, 100,
-  48, 100,
-  60 | 0x80, 100,
-  60, 100,
-  48 | 0x80, 100,
-  48, 100,
-  60 | 0x80, 100,
-  60, 100,
-  48 | 0x80, 100,
-  48 | 0x80, 100 | 0x80,
-  60 | 0x80, 100,
-  60, 100,
-  48 | 0x80, 100,
-  48, 100,
-  
+  // Polyphony mode
+  POLY,
+
   // Padding
-  0,
-  0,
-  0,
-  0,
+  0, 0, 0, 0, 0, 0, 0,
 };
 
 void Part::Touch() {
@@ -160,10 +128,13 @@ void Part::Touch() {
 }
 
 void Part::TouchPatch() {
-  // Sanitize waveform values — clamp out-of-range shapes from old patches.
-  for (uint8_t i = 0; i < kNumOscillators; ++i) {
-    if (patch_.osc[i].shape >= WAVEFORM_LAST) {
-      patch_.osc[i].shape = WAVEFORM_NONE;
+  // Sanitize waveform values — only in classic mode.
+  // Special modes repurpose osc[1].shape for packed FM waveform nibbles.
+  if (patch_.padding[2] == ENGINE_CLASSIC) {
+    for (uint8_t i = 0; i < kNumOscillators; ++i) {
+      if (patch_.osc[i].shape >= WAVEFORM_LAST) {
+        patch_.osc[i].shape = WAVEFORM_NONE;
+      }
     }
   }
   flags_ = FLAG_HAS_CHANGE;
@@ -205,17 +176,6 @@ void Part::InitSettings(InitializationMode mode) {
     RandomizeRange(PRM_PART_VOLUME, sizeof(PartData));
   }
   Touch();
-}
-
-void Part::InitSequence(InitializationMode mode) {
-  if (mode == INITIALIZATION_DEFAULT) {
-    memcpy_P(
-        mutable_raw_sequence_data(),
-        (prog_char*)(&init_part) + 8,
-        72);
-  } else {
-    RandomizeRange(PRM_PART_VOLUME + 8, 72);
-  }
 }
 
 void Part::RandomizeRange(uint8_t start, uint8_t size) {

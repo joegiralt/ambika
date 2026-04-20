@@ -34,10 +34,9 @@ using avrlib::FilesystemStatus;
 
 enum StorageObject {
   STORAGE_OBJECT_PATCH,
-  STORAGE_OBJECT_SEQUENCE,
+  STORAGE_OBJECT_PART,
   STORAGE_OBJECT_PROGRAM,
   STORAGE_OBJECT_MULTI,
-  STORAGE_OBJECT_PART,
 };
 
 enum SysExReceptionState {

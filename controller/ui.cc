@@ -338,28 +338,35 @@ void Ui::DoEvents() {
       case CONTROL_ENCODER:
         if (e.control_id == 0) {
           if (s1_held_) {
-            // Mode select active: encoder cycles synthesis modes.
-            static const uint8_t modes[] PROGMEM = {
-              WAVEFORM_SAW, WAVEFORM_FM4OP,
-              WAVEFORM_KS_PLUCK, WAVEFORM_WESTCOAST
-            };
+            // Mode select: cycle engine type via padding[2].
             static const uint8_t pages[] PROGMEM = {
               PAGE_OSCILLATORS, PAGE_FM4OP,
               PAGE_KS_PLUCK, PAGE_WESTCOAST
             };
             uint8_t* patch = multi.mutable_part(
                 state_.active_part)->mutable_raw_patch_data();
-            uint8_t current = patch[0];
-            int8_t idx = 0;
-            for (uint8_t m = 0; m < 4; ++m) {
-              if (current == pgm_read_byte(&modes[m])) { idx = m; break; }
-            }
+            int8_t idx = patch[106];  // padding[2] = engine type
             idx += (static_cast<int8_t>(e.value) > 0) ? 1 : -1;
-            if (idx < 0) idx = 3;
-            if (idx > 3) idx = 0;
-            patch[0] = pgm_read_byte(&modes[idx]);
+            if (idx < 0) idx = ENGINE_LAST - 1;
+            if (idx >= ENGINE_LAST) idx = 0;
+            patch[106] = idx;
+            // When switching to classic, reset mixer and waveform.
+            if (idx == ENGINE_CLASSIC) {
+              if (patch[0] >= WAVEFORM_FM4OP) {
+                patch[0] = WAVEFORM_SAW;
+              }
+              patch[8] = 32;
+              patch[9] = 0;
+              patch[10] = 0;
+              patch[11] = 0;
+              patch[12] = 0;
+              patch[13] = 0;
+              patch[14] = 0;
+              patch[15] = 0;
+            }
             multi.mutable_part(state_.active_part)->TouchPatch();
-            ShowPage(static_cast<UiPageNumber>(pgm_read_byte(&pages[idx])));
+            ShowPage(static_cast<UiPageNumber>(
+                pgm_read_byte(&pages[idx])));
           } else {
             (*event_handlers_.OnIncrement)(e.value);
           }
@@ -448,6 +455,18 @@ void Ui::DoEvents() {
     }
   }
   leds.Sync();
+}
+
+/* static */
+void Ui::ShowPreviousPage() {
+  // Route to the correct engine page based on padding[2].
+  uint8_t engine = multi.part(state_.active_part).raw_patch_data()[106];
+  switch (engine) {
+    case ENGINE_FM4OP: ShowPage(PAGE_FM4OP); break;
+    case ENGINE_KS_PLUCK: ShowPage(PAGE_KS_PLUCK); break;
+    case ENGINE_WESTCOAST: ShowPage(PAGE_WESTCOAST); break;
+    default: ShowPage(most_recent_non_system_page_); break;
+  }
 }
 
 /* static */

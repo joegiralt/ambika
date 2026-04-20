@@ -154,10 +154,7 @@ uint8_t Storage::object_size(const StorageLocation& location) {
   switch (location.object) {
     case STORAGE_OBJECT_PATCH:
       return sizeof(Patch);
-      
-    case STORAGE_OBJECT_SEQUENCE:
-      return 72;
-      
+
     case STORAGE_OBJECT_PART:
       return sizeof(PartData);
       
@@ -188,10 +185,7 @@ const uint8_t* Storage::object_data(const StorageLocation& location) {
   switch (location.object) {
     case STORAGE_OBJECT_PATCH:
       return multi.part(location.part).raw_patch_data();
-      
-    case STORAGE_OBJECT_SEQUENCE:
-      return multi.part(location.part).raw_sequence_data();
-      
+
     case STORAGE_OBJECT_PART:
       return multi.part(location.part).raw_data();
       
@@ -206,10 +200,7 @@ uint8_t* Storage::mutable_object_data(const StorageLocation& location) {
   switch (location.object) {
     case STORAGE_OBJECT_PATCH:
       return multi.mutable_part(location.part)->mutable_raw_patch_data();
-      
-    case STORAGE_OBJECT_SEQUENCE:
-      return multi.mutable_part(location.part)->mutable_raw_sequence_data();
-      
+
     case STORAGE_OBJECT_PART:
       return multi.mutable_part(location.part)->mutable_raw_data();
       
@@ -279,7 +270,6 @@ void Storage::ForEachObject(
   destination.alias = 0;
   switch(destination.object) {
     case STORAGE_OBJECT_PATCH:
-    case STORAGE_OBJECT_SEQUENCE:
     case STORAGE_OBJECT_PART:
       (*object_fn)(destination);
       break;
@@ -320,11 +310,13 @@ void Storage::TouchObject(const StorageLocation& location) {
   // object is freshly loaded and has received no user changes.
   switch (location.object) {
     case STORAGE_OBJECT_PATCH:
+      multi.mutable_part(location.part)->AllSoundOff();
+      multi.mutable_part(location.part)->TouchPatch();
+      ConstantDelay(5);
       multi.mutable_part(location.part)->TouchPatch();
       break;
 
     case STORAGE_OBJECT_PART:
-    case STORAGE_OBJECT_SEQUENCE:
       multi.mutable_part(location.part)->Touch();
       break;
     
@@ -336,8 +328,12 @@ void Storage::TouchObject(const StorageLocation& location) {
 
 /* static */
 void Storage::SysExSendObject(const StorageLocation& location) {
+  // Map StorageObject to SysEx command, preserving wire protocol
+  // (skip old slot 2 = sequence).
+  uint8_t cmd = location.object + 1;
+  if (cmd >= 2) ++cmd;  // shift up past removed sequence slot
   SysExSendRaw(
-      location.object + 1,
+      cmd,
       location.alias,
       object_data(location),
       object_size(location),
@@ -397,8 +393,11 @@ void Storage::RIFFWriteObject(const StorageLocation& location) {
   w.value = size + 4;
   file_.Write(w.bytes, 4, &written);
   // Write the position words.
+  // Map StorageObject to wire format (skip old slot 2 = sequence).
   w.value = 0;
-  w.bytes[0] = location.object + 1;
+  uint8_t wire_obj = location.object + 1;
+  if (wire_obj >= 2) ++wire_obj;  // shift up past removed sequence slot
+  w.bytes[0] = wire_obj;
   w.bytes[1] = location.alias;
   file_.Write(w.bytes, 4, &written);
   
@@ -450,7 +449,14 @@ FilesystemStatus Storage::Load(
       if (id.value == kObjectTag && load_contents) {
         file_.Read(id.bytes, 4, &read);
         StorageLocation destination;
-        destination.object = static_cast<StorageObject>(id.bytes[0] - 1);
+        uint8_t obj_cmd = id.bytes[0];
+        if (obj_cmd == 2) {
+          // Old sequence object — skip.
+          file_.Seek(file_.tell() + size.value - 4);
+          continue;
+        }
+        if (obj_cmd >= 3) --obj_cmd;  // shift down past removed sequence slot
+        destination.object = static_cast<StorageObject>(obj_cmd - 1);
         destination.part = id.bytes[1] == 0 ? location.part : (id.bytes[1] - 1);
       
         uint8_t expected_size = object_size(destination);
@@ -670,13 +676,15 @@ void Storage::SysExParseCommand() {
   sysex_rx_state_ = RECEIVING_DATA;
   switch (sysex_rx_command_[0]) {
     case 0x01:
-    case 0x02:
     case 0x03:
     case 0x04:
     case 0x05:
       {
         StorageLocation location;
-        location.object = static_cast<StorageObject>(sysex_rx_command_[0] - 1);
+        // Map SysEx command to StorageObject (skip old 0x02 = sequence).
+        uint8_t cmd = sysex_rx_command_[0];
+        if (cmd >= 0x03) --cmd;  // shift down past removed sequence slot
+        location.object = static_cast<StorageObject>(cmd - 1);
         sysex_rx_expected_size_ = object_size(location);
       }
       break;
@@ -689,7 +697,6 @@ void Storage::SysExParseCommand() {
       break;
 
     case 0x11:
-    case 0x12:
     case 0x13:
     case 0x14:
     case 0x15:
@@ -719,13 +726,16 @@ void Storage::SysExAcceptCommand() {
 
   switch (sysex_rx_command_[0]) {
     case 0x01:
-    case 0x02:
     case 0x03:
     case 0x04:
     case 0x05:
-      location.object = static_cast<StorageObject>(sysex_rx_command_[0] - 0x01);
-      ReadObject(location);
-      TouchObject(location);
+      {
+        uint8_t cmd = sysex_rx_command_[0];
+        if (cmd >= 0x03) --cmd;  // shift down past removed sequence slot
+        location.object = static_cast<StorageObject>(cmd - 0x01);
+        ReadObject(location);
+        TouchObject(location);
+      }
       break;
 
     case 0x0f:
@@ -741,12 +751,15 @@ void Storage::SysExAcceptCommand() {
       break;
 
     case 0x11:
-    case 0x12:
     case 0x13:
     case 0x14:
     case 0x15:
-      location.object = static_cast<StorageObject>(sysex_rx_command_[0] - 0x11);
-      SysExSend(location);
+      {
+        uint8_t cmd = sysex_rx_command_[0];
+        if (cmd >= 0x13) --cmd;  // shift down past removed sequence slot
+        location.object = static_cast<StorageObject>(cmd - 0x11);
+        SysExSend(location);
+      }
       break;
       
     case 0x1f:

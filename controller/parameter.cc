@@ -802,26 +802,26 @@ static const prog_Parameter parameters[kNumParameters] PROGMEM = {
     1, 0, 0xff, 106,
     STR_RES_GRID, STR_RES_GRID, STR_RES_ARPEGGIO },
     
-  // 54
+  // 54 - (removed: was sequence length 1)
   { PARAMETER_LEVEL_PART,
-    PRM_PART_SEQUENCE_LENGTH_1,
-    UNIT_UINT8, 1, 32,
+    PRM_PART_POLYPHONY_MODE + 1,
+    UNIT_UINT8, 0, 0,
     1, 0, 0xff, 0xff,
-    STR_RES_LEN1, STR_RES_SEQ1_LEN, STR_RES_SEQUENCER },
+    STR_RES_LEN1, STR_RES_SEQ1_LEN, STR_RES_PART },
 
-  // 55
+  // 55 - (removed: was sequence length 2)
   { PARAMETER_LEVEL_PART,
-    PRM_PART_SEQUENCE_LENGTH_2,
-    UNIT_UINT8, 1, 32,
+    PRM_PART_POLYPHONY_MODE + 2,
+    UNIT_UINT8, 0, 0,
     1, 0, 0xff, 0xff,
-    STR_RES_LEN2, STR_RES_SEQ2_LEN, STR_RES_SEQUENCER },
+    STR_RES_LEN2, STR_RES_SEQ2_LEN, STR_RES_PART },
 
-  // 56
+  // 56 - (removed: was sequence length 3)
   { PARAMETER_LEVEL_PART,
-    PRM_PART_SEQUENCE_LENGTH_3,
-    UNIT_UINT8, 1, 32,
+    PRM_PART_POLYPHONY_MODE + 3,
+    UNIT_UINT8, 0, 0,
     1, 0, 0xff, 0xff,
-    STR_RES_LENP, STR_RES_PATT_LEN, STR_RES_SEQUENCER },
+    STR_RES_LENP, STR_RES_PATT_LEN, STR_RES_PART },
   
   // 57
   { PARAMETER_LEVEL_PART,
@@ -960,28 +960,28 @@ static const prog_Parameter parameters[kNumParameters] PROGMEM = {
   { PARAMETER_LEVEL_PATCH,
     PRM_PATCH_EXTRA_ENV_ATTACK,
     UNIT_RAW_UINT8, 0, 127,
-    4, 4, 0xff, 0xff,
+    4, 8, 0xff, 0xff,
     STR_RES_ATTK, STR_RES_ATTACK, STR_RES_ENVELOPE },
 
   // 77 - extra envelope 4 decay
   { PARAMETER_LEVEL_PATCH,
     PRM_PATCH_EXTRA_ENV_DECAY,
     UNIT_RAW_UINT8, 0, 127,
-    4, 4, 0xff, 0xff,
+    4, 8, 0xff, 0xff,
     STR_RES_DECAY, STR_RES_DECAY, STR_RES_ENVELOPE },
 
   // 78 - extra envelope 4 sustain
   { PARAMETER_LEVEL_PATCH,
     PRM_PATCH_EXTRA_ENV_SUSTAIN,
     UNIT_RAW_UINT8, 0, 127,
-    4, 4, 0xff, 0xff,
+    4, 8, 0xff, 0xff,
     STR_RES_SUSTAIN, STR_RES_SUSTAIN, STR_RES_ENVELOPE },
 
   // 79 - extra envelope 4 release
   { PARAMETER_LEVEL_PATCH,
     PRM_PATCH_EXTRA_ENV_RELEASE,
     UNIT_RAW_UINT8, 0, 127,
-    4, 4, 0xff, 0xff,
+    4, 8, 0xff, 0xff,
     STR_RES_RELEASE, STR_RES_RELEASE, STR_RES_ENVELOPE },
 };
 

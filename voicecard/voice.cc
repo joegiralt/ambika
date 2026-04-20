@@ -20,6 +20,7 @@
 #include "voicecard/voice.h"
 
 #include "voicecard/audio_out.h"
+#include "voicecard/leds.h"
 #include "voicecard/oscillator.h"
 #include "voicecard/sub_oscillator.h"
 #include "voicecard/transient_generator.h"
@@ -61,6 +62,98 @@ uint8_t Voice::dummy_sync_state_[kAudioBlockSize];
 Fm4Op Voice::fm4op_;
 KarplusStrong Voice::karplus_;
 WestCoast Voice::westcoast_;
+uint8_t Voice::last_engine_ = 0xFF;
+
+// TX81Z frequency ratios as 8.8 fixed-point (ratio × 256).
+const prog_uint16_t Fm4Op::tx81z_ratios_[] PROGMEM = {
+  128,  182,  200,  223,  256,  361,  402,  443,
+  512,  722,  768,  804,  886, 1024, 1085, 1206,
+ 1280, 1329, 1446, 1536, 1608, 1772, 1792, 1810,
+ 2010, 2048, 2171, 2214, 2304, 2412, 2532, 2560,
+ 2657, 2813, 2816, 2893, 3072, 3100, 3215, 3256,
+ 3328, 3543, 3584, 3610, 3617, 3840, 3981, 3986,
+ 4019, 4342, 4421, 4429, 4703, 4823, 4872, 5064,
+ 5225, 5315, 5427, 5627, 5757, 6029, 6200, 6643,
+};
+
+// TX81Z-style exponential output level curve (0.75 dB/step).
+// Upper 64 entries (levels 64-127). Levels 0-63 handled by LevelToAmplitude().
+const prog_uint8_t Fm4Op::level_to_amplitude_hi_[64] PROGMEM = {
+    1,   1,   1,   1,   2,   2,   2,   2,   2,   2,   3,   3,   3,   3,   4,   4,
+    4,   5,   5,   6,   6,   7,   7,   8,   9,  10,  10,  11,  12,  14,  15,  16,
+   18,  19,  21,  23,  25,  27,  29,  32,  35,  38,  42,  45,  49,  54,  59,  64,
+   70,  76,  83,  90,  99, 108, 117, 128, 139, 152, 166, 181, 197, 215, 234, 255,
+};
+
+// 512-entry 16-bit sine table for FM synthesis.
+// Phase-shifted to match original table (trough at index 0).
+const prog_uint16_t wav_res_sine16[] PROGMEM = {
+      1,     3,    10,    23,    40,    62,    89,   121,
+    158,   200,   247,   299,   355,   417,   483,   554,
+    630,   711,   797,   887,   982,  1083,  1187,  1297,
+   1411,  1531,  1654,  1783,  1916,  2054,  2196,  2343,
+   2495,  2651,  2812,  2977,  3146,  3321,  3499,  3682,
+   3870,  4061,  4257,  4458,  4662,  4871,  5084,  5301,
+   5523,  5748,  5978,  6211,  6449,  6690,  6936,  7185,
+   7438,  7695,  7956,  8221,  8489,  8761,  9036,  9315,
+   9598,  9884, 10173, 10466, 10763, 11062, 11365, 11671,
+  11980, 12293, 12608, 12927, 13248, 13573, 13900, 14230,
+  14563, 14899, 15237, 15578, 15922, 16268, 16617, 16968,
+  17321, 17677, 18035, 18395, 18758, 19122, 19489, 19858,
+  20228, 20601, 20975, 21351, 21729, 22108, 22489, 22872,
+  23256, 23641, 24028, 24416, 24806, 25196, 25588, 25981,
+  26375, 26770, 27166, 27562, 27960, 28358, 28756, 29156,
+  29556, 29956, 30357, 30758, 31160, 31561, 31963, 32365,
+  32768, 33170, 33572, 33974, 34375, 34777, 35178, 35579,
+  35979, 36379, 36779, 37177, 37575, 37973, 38369, 38765,
+  39160, 39554, 39947, 40339, 40729, 41119, 41507, 41894,
+  42279, 42663, 43046, 43427, 43806, 44184, 44560, 44934,
+  45307, 45677, 46046, 46413, 46777, 47140, 47500, 47858,
+  48214, 48567, 48918, 49267, 49613, 49957, 50298, 50636,
+  50972, 51305, 51635, 51962, 52287, 52608, 52927, 53242,
+  53555, 53864, 54170, 54473, 54772, 55069, 55362, 55651,
+  55937, 56220, 56499, 56774, 57046, 57314, 57579, 57840,
+  58097, 58350, 58599, 58845, 59086, 59324, 59557, 59787,
+  60012, 60234, 60451, 60664, 60873, 61077, 61278, 61474,
+  61665, 61853, 62036, 62214, 62389, 62558, 62723, 62884,
+  63040, 63192, 63339, 63481, 63619, 63752, 63881, 64004,
+  64124, 64238, 64348, 64452, 64553, 64648, 64738, 64824,
+  64905, 64981, 65052, 65118, 65180, 65236, 65288, 65335,
+  65377, 65414, 65446, 65473, 65495, 65512, 65525, 65532,
+  65535, 65532, 65525, 65512, 65495, 65473, 65446, 65414,
+  65377, 65335, 65288, 65236, 65180, 65118, 65052, 64981,
+  64905, 64824, 64738, 64648, 64553, 64452, 64348, 64238,
+  64124, 64004, 63881, 63752, 63619, 63481, 63339, 63192,
+  63040, 62884, 62723, 62558, 62389, 62214, 62036, 61853,
+  61665, 61474, 61278, 61077, 60873, 60664, 60451, 60234,
+  60012, 59787, 59557, 59324, 59086, 58845, 58599, 58350,
+  58097, 57840, 57579, 57314, 57046, 56774, 56499, 56220,
+  55937, 55651, 55362, 55069, 54772, 54473, 54170, 53864,
+  53555, 53242, 52927, 52608, 52287, 51962, 51635, 51305,
+  50972, 50636, 50298, 49957, 49613, 49267, 48918, 48567,
+  48214, 47858, 47500, 47140, 46777, 46413, 46046, 45677,
+  45307, 44934, 44560, 44184, 43806, 43427, 43046, 42663,
+  42279, 41894, 41507, 41119, 40729, 40339, 39947, 39554,
+  39160, 38765, 38369, 37973, 37575, 37177, 36779, 36379,
+  35979, 35579, 35178, 34777, 34375, 33974, 33572, 33170,
+  32768, 32365, 31963, 31561, 31160, 30758, 30357, 29956,
+  29556, 29156, 28756, 28358, 27960, 27562, 27166, 26770,
+  26375, 25981, 25588, 25196, 24806, 24416, 24028, 23641,
+  23256, 22872, 22489, 22108, 21729, 21351, 20975, 20601,
+  20228, 19858, 19489, 19122, 18758, 18395, 18035, 17677,
+  17321, 16968, 16617, 16268, 15922, 15578, 15237, 14899,
+  14563, 14230, 13900, 13573, 13248, 12927, 12608, 12293,
+  11980, 11671, 11365, 11062, 10763, 10466, 10173,  9884,
+   9598,  9315,  9036,  8761,  8489,  8221,  7956,  7695,
+   7438,  7185,  6936,  6690,  6449,  6211,  5978,  5748,
+   5523,  5301,  5084,  4871,  4662,  4458,  4257,  4061,
+   3870,  3682,  3499,  3321,  3146,  2977,  2812,  2651,
+   2495,  2343,  2196,  2054,  1916,  1783,  1654,  1531,
+   1411,  1297,  1187,  1083,   982,   887,   797,   711,
+    630,   554,   483,   417,   355,   299,   247,   200,
+    158,   121,    89,    62,    40,    23,    10,     3,
+      1,
+};
 /* </static> */
 
 static const prog_Patch init_patch PROGMEM = {
@@ -106,11 +199,11 @@ static const prog_Patch init_patch PROGMEM = {
   // Padding
   0, 0, 0, 0, 0, 0, 0, 0,
 
-  // Extra envelopes (env4-7 ADSR)
-  0, 40, 20, 60,
-  0, 40, 20, 60,
-  0, 40, 20, 60,
-  0, 40, 20, 60,
+  // Extra envelope-LFO settings (env4-7: ADSR + LFO shape/rate/curve/retrigger)
+  0, 40, 20, 60, LFO_WAVEFORM_TRIANGLE, 0, 0, 0,
+  0, 40, 20, 60, LFO_WAVEFORM_TRIANGLE, 0, 0, 0,
+  0, 40, 20, 60, LFO_WAVEFORM_TRIANGLE, 0, 0, 0,
+  0, 40, 20, 60, LFO_WAVEFORM_TRIANGLE, 0, 0, 0,
 };
 
 /* static */
@@ -173,7 +266,7 @@ void Voice::Trigger(uint16_t note, uint8_t velocity, uint8_t legato) {
     gate_ = 255;
     TriggerEnvelope(ATTACK);
     transient_generator.Trigger();
-    if (patch_.osc[0].shape == WAVEFORM_KS_PLUCK) {
+    if (patch_.padding[2] == ENGINE_KS_PLUCK) {
       karplus_.Trigger(
           patch_.osc[1].shape,      // excitation type
           patch_.osc[1].parameter,  // excitation color
@@ -380,10 +473,11 @@ inline void Voice::UpdateDestinations() {
   }
   for (int i = 0; i < kNumExtraEnvelopes; ++i) {
     envelope_[kNumEnvLfoSlots + i].Update(
-        patch_.extra_env[i].attack,
-        patch_.extra_env[i].decay,
-        patch_.extra_env[i].sustain,
-        patch_.extra_env[i].release);
+        patch_.extra_env_lfo[i].attack,
+        patch_.extra_env_lfo[i].decay,
+        patch_.extra_env_lfo[i].sustain,
+        patch_.extra_env_lfo[i].release,
+        patch_.extra_env_lfo[i].envelope_curve);
   }
   
   voice_lfo_.set_phase_increment(
@@ -406,25 +500,30 @@ inline void Voice::RenderOscillators() {
   base_pitch += (dst_[MOD_DST_OSC_1_2_COARSE] - 8192) >> 4;
   base_pitch += (dst_[MOD_DST_OSC_1_2_FINE] - 8192) >> 7;
 
+  uint8_t engine = patch_.padding[2];
+
+  // Reset engine state when engine type changes.
+  if (engine != last_engine_) {
+    last_engine_ = engine;
+    fm4op_.Init();
+    karplus_.Init();
+    westcoast_.Init();
+  }
+
   // --- 4-op FM mode ---
-  if (patch_.osc[0].shape == WAVEFORM_FM4OP) {
+  if (engine == ENGINE_FM4OP) {
     uint16_t base_increment = ComputePhaseIncrement(base_pitch);
 
     // Set up operator phase increments from patch fields.
-    // Op1: osc[0].range (coarse), osc[0].detune (fine)
+    // Coarse ratio is a TX81Z-style index (0-63) into the ratio table.
     fm4op_.SetOperatorIncrement(0, base_increment,
-        patch_.osc[0].range, patch_.osc[0].detune);
-    // Op2: osc[1].range (coarse), osc[1].detune (fine)
+        static_cast<uint8_t>(patch_.osc[0].range), patch_.osc[0].detune);
     fm4op_.SetOperatorIncrement(1, base_increment,
-        patch_.osc[1].range, patch_.osc[1].detune);
-    // Op3: mix_balance (coarse), mix_op (fine)
+        static_cast<uint8_t>(patch_.osc[1].range), patch_.osc[1].detune);
     fm4op_.SetOperatorIncrement(2, base_increment,
-        static_cast<int8_t>(patch_.mix_balance),
-        static_cast<int8_t>(patch_.mix_op));
-    // Op4: mix_parameter (coarse), mix_sub_osc_shape (fine)
+        patch_.mix_balance, static_cast<int8_t>(patch_.mix_op));
     fm4op_.SetOperatorIncrement(3, base_increment,
-        static_cast<int8_t>(patch_.mix_parameter),
-        static_cast<int8_t>(patch_.mix_sub_osc_shape));
+        patch_.mix_parameter, static_cast<int8_t>(patch_.mix_sub_osc_shape));
 
     // Extract operator waveforms from packed nibbles.
     uint8_t op_waveform[4];
@@ -439,17 +538,17 @@ inline void Voice::RenderOscillators() {
       }
     }
 
-    // Operator output levels.
+    // Operator output levels — TX81Z signal chain:
+    // 1. Exponential curve on raw patch level (TL → amplitude)
+    // 2. Multiply by per-op envelope (linear amplitude modulation)
     uint8_t op_level[4];
     op_level[0] = patch_.mix_sub_osc;
     op_level[1] = patch_.mix_noise;
     op_level[2] = patch_.mix_fuzz;
     op_level[3] = patch_.mix_crush;
-
-    // Modulate total FM depth via PARAMETER_1 mod destination.
-    uint8_t depth_mod = U15ShiftRight7(dst_[MOD_DST_PARAMETER_1]);
     for (uint8_t i = 0; i < 4; ++i) {
-      op_level[i] = U8U8MulShift8(op_level[i], depth_mod);
+      uint8_t amp = Fm4Op::LevelToAmplitude(op_level[i]);
+      op_level[i] = U8U8MulShift8(amp, modulation_sources_[MOD_SRC_ENV_4 + i]);
     }
 
     // Algorithm from osc[0].parameter.
@@ -471,7 +570,7 @@ inline void Voice::RenderOscillators() {
   }
 
   // --- Karplus-Strong mode ---
-  if (patch_.osc[0].shape == WAVEFORM_KS_PLUCK) {
+  if (engine == ENGINE_KS_PLUCK) {
     int16_t ks_pitch = base_pitch + S8U8Mul(patch_.osc[0].range, 128)
         + patch_.osc[0].detune;
     uint16_t ks_increment = ComputePhaseIncrement(ks_pitch);
@@ -498,7 +597,7 @@ inline void Voice::RenderOscillators() {
   }
 
   // --- West Coast mode ---
-  if (patch_.osc[0].shape == WAVEFORM_WESTCOAST) {
+  if (engine == ENGINE_WESTCOAST) {
     int16_t wc_pitch = base_pitch + S8U8Mul(patch_.osc[0].range, 128)
         + patch_.osc[0].detune;
     uint16_t wc_increment = ComputePhaseIncrement(wc_pitch);
@@ -602,10 +701,10 @@ void Voice::ProcessBlock() {
 
   RenderOscillators();
 
-  uint8_t is_fm4op = (patch_.osc[0].shape == WAVEFORM_FM4OP);
+  uint8_t is_fm4op = (patch_.padding[2] == ENGINE_FM4OP);
   uint8_t is_special = is_fm4op ||
-      (patch_.osc[0].shape == WAVEFORM_KS_PLUCK) ||
-      (patch_.osc[0].shape == WAVEFORM_WESTCOAST);
+      (patch_.padding[2] == ENGINE_KS_PLUCK) ||
+      (patch_.padding[2] == ENGINE_WESTCOAST);
 
   // In FM4OP mode, skip oscillator mixing and sub-osc (those patch fields
   // are reinterpreted as FM parameters).

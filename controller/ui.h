@@ -179,9 +179,8 @@ class Ui {
   static void ShowPage(UiPageNumber page) {
     ShowPage(page, 1);
   }
-  static void ShowPreviousPage() {
-    ShowPage(most_recent_non_system_page_);
-  };
+  static void ShowPreviousPage();
+
 
   static void ShowDialogBox(uint8_t dialog_id, Dialog dialog, uint8_t choice);
   static void CloseDialogBox(uint8_t return_value);

@@ -165,6 +165,10 @@ uint8_t Library::OnKeyBrowse(uint8_t key) {
             location_.object = STORAGE_OBJECT_PATCH;
           } else {
             location_.object = static_cast<StorageObject>(location_.object + 1);
+            // Skip PART (not independently browseable).
+            if (location_.object == STORAGE_OBJECT_PART) {
+              location_.object = STORAGE_OBJECT_PROGRAM;
+            }
           }
           location_.bank = loaded_objects_indices_[location_.index()] >> 8;
           location_.slot = loaded_objects_indices_[location_.index()] & 0xff;
@@ -307,6 +311,15 @@ void Library::UpdateScreen() {
   memcpy(&buffer[20], name_, sizeof(name_) - 1);
   AlignLeft(&buffer[20], sizeof(name_) - 1);
 
+  // Show engine type after patch name: VA/FM/KS/WC
+  if (location_.object == STORAGE_OBJECT_PATCH) {
+    uint8_t eng = multi.part(ui.state().active_part).raw_patch_data()[106];
+    static const prog_char eng_names[] PROGMEM = "VA" "FM" "KS" "WC";
+    if (eng < ENGINE_LAST) {
+      memcpy_P(&buffer[37], eng_names + eng * 2, 2);
+    }
+  }
+
   // Second line: buttons
   if (action_ == LIBRARY_ACTION_BROWSE) {
     buffer = display.line_buffer(1) + 1;
@@ -380,10 +393,6 @@ void Library::OnDialogClosed(uint8_t dialog_id, uint8_t return_value) {
           switch (location_.object) {
             case STORAGE_OBJECT_PATCH:
               multi.mutable_part(location_.part)->InitPatch(mode);
-              break;
-
-            case STORAGE_OBJECT_SEQUENCE:
-              multi.mutable_part(location_.part)->InitSequence(mode);
               break;
 
             case STORAGE_OBJECT_PROGRAM:

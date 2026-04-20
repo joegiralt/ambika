@@ -15,6 +15,7 @@
 
 #include "voicecard/oscillator.h"
 
+#include "voicecard/fm4op.h"
 #include "voicecard/voicecard.h"
 
 namespace ambika {
@@ -111,23 +112,30 @@ void Oscillator::RenderBandlimitedPwm(uint8_t* buffer) {
 // The position is determined by the note pitch, to prevent aliasing.
 
 void Oscillator::RenderSimpleWavetable(uint8_t* buffer) {
+  // Pure sine: use 16-bit table for clean output.
+  if (shape_ == WAVEFORM_SINE) {
+    BEGIN_SAMPLE_LOOP
+      UPDATE_PHASE_MORE_REGISTERS
+      uint16_t index = phase.integral >> 7;
+      uint8_t frac = (phase.integral & 0x7F) << 1;
+      uint16_t a = pgm_read_word(&wav_res_sine16[index]);
+      uint16_t b = pgm_read_word(&wav_res_sine16[index + 1]);
+      *buffer++ = (a + ((static_cast<int32_t>(b - a) * frac) >> 8)) >> 8;
+    END_SAMPLE_LOOP
+    return;
+  }
+
   uint8_t balance_index = U8Swap4(note_);
   uint8_t gain_2 = balance_index & 0xf0;
   uint8_t gain_1 = ~gain_2;
-  uint8_t wave_1_index, wave_2_index;
-  if (shape_ != WAVEFORM_SINE) {
-    uint8_t wave_index = balance_index & 0xf;
-    uint8_t base_resource_id = shape_ == WAVEFORM_SAW ?
-        WAV_RES_BANDLIMITED_SAW_0 :
-        (shape_ == WAVEFORM_SQUARE ? WAV_RES_BANDLIMITED_SQUARE_0  : 
-        WAV_RES_BANDLIMITED_TRIANGLE_0);
-    wave_1_index = base_resource_id + wave_index;
-    wave_index = U8AddClip(wave_index, 1, kNumZonesFullSampleRate);
-    wave_2_index = base_resource_id + wave_index;
-  } else {
-    wave_1_index = WAV_RES_SINE;
-    wave_2_index = WAV_RES_SINE;
-  }
+  uint8_t wave_index = balance_index & 0xf;
+  uint8_t base_resource_id = shape_ == WAVEFORM_SAW ?
+      WAV_RES_BANDLIMITED_SAW_0 :
+      (shape_ == WAVEFORM_SQUARE ? WAV_RES_BANDLIMITED_SQUARE_0  :
+      WAV_RES_BANDLIMITED_TRIANGLE_0);
+  uint8_t wave_1_index = base_resource_id + wave_index;
+  wave_index = U8AddClip(wave_index, 1, kNumZonesFullSampleRate);
+  uint8_t wave_2_index = base_resource_id + wave_index;
   const prog_uint8_t* wave_1 = waveform_table[wave_1_index];
   const prog_uint8_t* wave_2 = waveform_table[wave_2_index];
 
@@ -143,7 +151,6 @@ void Oscillator::RenderSimpleWavetable(uint8_t* buffer) {
       *buffer++ = sample;
     END_SAMPLE_LOOP
   } else {
-    // The waveshaper for the triangle is different.
     BEGIN_SAMPLE_LOOP
       UPDATE_PHASE_MORE_REGISTERS
       uint8_t sample = InterpolateTwoTables(

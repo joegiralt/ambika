@@ -26,7 +26,7 @@ using namespace avrlib;
 
 namespace ambika {
 
-static const uint16_t kKarplusBufferSize = 384;
+static const uint16_t kKarplusBufferSize = 192;
 
 // Excitation types.
 enum KsExcitation {
@@ -56,59 +56,56 @@ class KarplusStrong {
     write_pos_ = 0;
     delay_length_ = kKarplusBufferSize;
     excited_ = 0;
+    lp_state_ = 0;
     for (uint16_t i = 0; i < kKarplusBufferSize; ++i) {
-      delay_line_[i] = 128;
+      delay_line_[i] = 0;
     }
   }
 
   // Excite the string.
   void Trigger(uint8_t excitation_type, uint8_t color, uint8_t position) {
-    // Fill delay line based on excitation type.
+    // Fill delay line with 16-bit excitation (centered at 0).
     for (uint16_t i = 0; i < delay_length_; ++i) {
-      uint8_t sample;
+      int16_t sample;
       switch (excitation_type) {
         case KS_EXC_CLICK:
-          sample = (i < 4) ? 255 : 128;
+          // Sharp impulse — very percussive attack.
+          sample = (i < 2) ? 16383 : ((i < 4) ? -16383 : 0);
           break;
-        case KS_EXC_BRIGHT: {
-          uint8_t noise = Random::GetByte();
-          // High-pass: subtract running average.
-          sample = (noise >> 1) + 64 + (Random::GetByte() >> 2);
+        case KS_EXC_BRIGHT:
+          // Full-range noise with extra high frequency content.
+          sample = (static_cast<int16_t>(Random::GetByte()) - 128) << 7;
+          sample += (static_cast<int16_t>(Random::GetByte()) - 128) << 5;
           break;
-        }
-        case KS_EXC_DARK: {
-          uint8_t noise = Random::GetByte();
-          // Simple low-pass: average with previous.
+        case KS_EXC_DARK:
+          // Heavily filtered noise — warm, muted pluck.
           if (i > 0) {
-            sample = (noise >> 1) + (delay_line_[i - 1] >> 1);
+            sample = (delay_line_[i - 1] * 3 +
+                ((static_cast<int16_t>(Random::GetByte()) - 128) << 6)) >> 2;
           } else {
-            sample = noise;
+            sample = (static_cast<int16_t>(Random::GetByte()) - 128) << 5;
           }
           break;
-        }
-        default:  // KS_EXC_NOISE
-          sample = Random::GetByte();
+        default:
+          // Standard noise burst.
+          sample = (static_cast<int16_t>(Random::GetByte()) - 128) << 7;
           break;
       }
       delay_line_[i] = sample;
     }
 
-    // Apply pluck position: create a comb-like notch at position harmonics.
-    // position 0 = pluck at bridge (all harmonics), 127 = pluck at middle.
+    // Pluck position comb filter.
     if (position > 4) {
       uint16_t notch_period = (delay_length_ * position) >> 7;
       if (notch_period > 1 && notch_period < delay_length_) {
         for (uint16_t i = 0; i < delay_length_ - notch_period; ++i) {
-          int16_t mixed = (static_cast<int16_t>(delay_line_[i]) +
-                          static_cast<int16_t>(delay_line_[i + notch_period])) >> 1;
-          delay_line_[i] = static_cast<uint8_t>(mixed);
+          delay_line_[i] = (delay_line_[i] + delay_line_[i + notch_period]) >> 1;
         }
       }
     }
 
-    // Apply excitation color (brightness): low-pass the initial excitation.
-    // Lower color = darker excitation.
-    uint8_t filter_passes = (127 - color) >> 4;  // 0-7 passes
+    // Excitation color low-pass.
+    uint8_t filter_passes = (127 - color) >> 4;
     for (uint8_t pass = 0; pass < filter_passes; ++pass) {
       for (uint16_t i = 1; i < delay_length_; ++i) {
         delay_line_[i] = (delay_line_[i] >> 1) + (delay_line_[i - 1] >> 1);
@@ -125,10 +122,14 @@ class KarplusStrong {
   }
 
   void SetPitch(uint16_t phase_increment) {
-    if (phase_increment < 256) {
-      phase_increment = 256;
+    // delay_length = sample_rate / frequency
+    // phase_increment represents frequency as a fraction of the sample rate.
+    // For accurate pitch: len = 65536 / phase_increment (full 16-bit division).
+    if (phase_increment < 1) {
+      phase_increment = 1;
     }
-    uint16_t len = 65535u / (phase_increment >> 8);
+    uint16_t len = static_cast<uint16_t>(
+        static_cast<uint32_t>(65536) / phase_increment);
     if (len < 2) len = 2;
     if (len >= kKarplusBufferSize) len = kKarplusBufferSize - 1;
     delay_length_ = len;
@@ -146,104 +147,115 @@ class KarplusStrong {
       return;
     }
 
-    uint8_t coeff = 32 + (damping << 1);
-    if (coeff < 32) coeff = 32;
-    uint8_t decay_amount = decay >> 3;
+    // Damping: IIR low-pass cutoff in the feedback loop.
+    // 0 = bright (high cutoff), 127 = very dark (low cutoff).
+    // The IIR filter creates dramatically different tones vs the 2-tap FIR.
+    uint8_t lp_cutoff = 255 - (damping << 1);
+    if (lp_cutoff < 2) lp_cutoff = 2;
+    // Pitch scaling: less filtering for shorter strings.
+    if (delay_length_ < 64) {
+      lp_cutoff = lp_cutoff + ((255 - lp_cutoff) >> 1);  // push toward bright
+    } else if (delay_length_ < 96) {
+      lp_cutoff = lp_cutoff + ((255 - lp_cutoff) >> 2);
+    }
+
+    // Decay: energy loss per delay-line cycle.
+    // 0 = infinite sustain, 127 = fast fade.
+    uint8_t decay_amount = decay >> 1;
+
+    // Stiffness offset scales with delay length.
+    uint16_t stiff_offset = (delay_length_ >> 3) + 1;
+
+    // Feedback as sustain: pushes cutoff higher (less loss = longer ring).
+    lp_cutoff = lp_cutoff + (((255 - lp_cutoff) * feedback) >> 8);
 
     // Advance ensemble LFO.
     uint16_t lfo_inc = static_cast<uint16_t>(ens_rate + 1) << 4;
 
     while (size--) {
-      // Advance LFO for ensemble read heads.
       ens_lfo_phase_ += lfo_inc;
 
-      // Primary read head (fixed position).
       uint16_t read_pos = write_pos_ + 1;
       if (read_pos >= delay_length_) read_pos = 0;
 
-      uint8_t current = delay_line_[read_pos];
+      int16_t current = delay_line_[read_pos];
       uint16_t next_pos = read_pos + 1;
       if (next_pos >= delay_length_) next_pos = 0;
-      uint8_t next = delay_line_[next_pos];
+      int16_t next = delay_line_[next_pos];
 
-      // KS low-pass averaging.
-      uint8_t filtered = ((uint16_t)current * (256 - coeff) +
-                          (uint16_t)next * coeff) >> 8;
+      // KS core: standard 2-sample average (the string physics).
+      int16_t avg = (current >> 1) + (next >> 1);
 
-      // Stiffness: allpass-like dispersion.
-      // Mixes current with a sample from a prime-offset position,
-      // creating inharmonic partials (piano/bell character).
-      if (stiffness > 0) {
-        uint16_t stiff_pos = read_pos + 7;  // Prime offset.
+      // Damping: IIR one-pole low-pass. This is what shapes the tone.
+      // High cutoff = bright (metallic), low cutoff = dark (muted thud).
+      lp_state_ += (static_cast<int32_t>(avg - lp_state_) * lp_cutoff) >> 8;
+      int16_t filtered = lp_state_;
+
+      // Stiffness: allpass-like mixing with a point further in the delay.
+      // Adds inharmonic partials (like piano string stiffness).
+      if (stiffness > 4) {
+        uint16_t stiff_pos = read_pos + stiff_offset;
         if (stiff_pos >= delay_length_) stiff_pos -= delay_length_;
-        uint8_t stiff_sample = delay_line_[stiff_pos];
-        filtered = ((uint16_t)filtered * (256 - stiffness) +
-                    (uint16_t)stiff_sample * stiffness) >> 8;
+        int16_t stiff_sample = delay_line_[stiff_pos];
+        uint8_t sa = stiffness >> 1;  // 0-63 range for stability
+        filtered = (static_cast<int32_t>(filtered) * (256 - sa) +
+                    static_cast<int32_t>(stiff_sample) * sa) >> 8;
       }
 
-      // Apply decay.
-      if (decay_amount) {
-        int16_t diff = static_cast<int16_t>(filtered) - 128;
-        diff -= (diff * decay_amount) >> 8;
-        filtered = 128 + diff;
+      // Decay: apply energy loss once per cycle through the buffer.
+      // Use a counter that wraps at delay_length_.
+      if (decay_amount && read_pos == 0) {
+        for (uint16_t i = 0; i < delay_length_; ++i) {
+          delay_line_[i] -= (delay_line_[i] * decay_amount) >> 9;
+        }
       }
 
-      // Body resonance.
+      // Body resonance: comb filter at 1/3 string length.
+      // Emphasizes the 3rd harmonic and its multiples.
       if (body > 4) {
-        uint16_t body_pos = read_pos + (delay_length_ >> 1);
+        uint16_t body_pos = read_pos + (delay_length_ / 3);
         if (body_pos >= delay_length_) body_pos -= delay_length_;
-        uint8_t body_sample = delay_line_[body_pos];
-        filtered = ((uint16_t)filtered * (256 - body) +
-                    (uint16_t)body_sample * body) >> 8;
+        int16_t body_sample = delay_line_[body_pos];
+        uint8_t body_amt = body >> 1;  // 0-63 range for stability
+        filtered = (static_cast<int32_t>(filtered) * (256 - body_amt) +
+                    static_cast<int32_t>(body_sample) * body_amt) >> 8;
       }
 
-      // Extra feedback for longer sustain.
-      if (feedback > 0) {
-        int16_t fb_val = static_cast<int16_t>(filtered) - 128;
-        fb_val += (fb_val * feedback) >> 8;
-        fb_val += 128;
-        if (fb_val > 255) fb_val = 255;
-        if (fb_val < 0) fb_val = 0;
-        filtered = fb_val;
-      }
-
-      // Write back to delay line.
       delay_line_[read_pos] = filtered;
       write_pos_ = read_pos;
 
-      // Ensemble: three read heads from same delay buffer.
-      uint8_t output = filtered;
+      // Ensemble: three read heads.
+      int16_t output = filtered;
       if (ens_mix > 0 && ens_depth > 0) {
-        // LFO triangle: map 16-bit phase to signed 8-bit triangle.
         uint8_t lfo_8 = ens_lfo_phase_ >> 8;
         int8_t lfo_val = (ens_lfo_phase_ & 0x8000)
             ? static_cast<int8_t>(255 - lfo_8)
             : static_cast<int8_t>(lfo_8);
 
-        // Head 2 and 3 offsets (signed, relative to read_pos).
-        int16_t offset2 = (static_cast<int16_t>(lfo_val) * ens_depth) >> 8;
-        int16_t offset3 = -offset2 + (ens_spread >> 2);
+        int16_t offset2 = (static_cast<int16_t>(lfo_val) * ens_depth) >> 7;
+        int16_t offset3 = -offset2 + (ens_spread >> 1);
 
-        // Wrap positions into delay line range.
         int16_t p2 = (static_cast<int16_t>(read_pos) + offset2) %
             static_cast<int16_t>(delay_length_);
         if (p2 < 0) p2 += delay_length_;
-
         int16_t p3 = (static_cast<int16_t>(read_pos) + offset3) %
             static_cast<int16_t>(delay_length_);
         if (p3 < 0) p3 += delay_length_;
 
-        uint8_t head2 = delay_line_[static_cast<uint16_t>(p2)];
-        uint8_t head3 = delay_line_[static_cast<uint16_t>(p3)];
+        int16_t head2 = delay_line_[static_cast<uint16_t>(p2)];
+        int16_t head3 = delay_line_[static_cast<uint16_t>(p3)];
 
-        // Mix: dry head + two wet heads.
         uint8_t dry = 255 - ens_mix;
-        uint16_t mixed = (uint16_t)filtered * dry +
-                         ((uint16_t)head2 + (uint16_t)head3) * (ens_mix >> 1);
+        int32_t mixed = static_cast<int32_t>(filtered) * dry +
+                        (static_cast<int32_t>(head2) + head3) * (ens_mix >> 1);
         output = mixed >> 8;
       }
 
-      *buffer++ = output;
+      // Truncate to 8-bit at output only (centered at 128).
+      int16_t out8 = (output >> 7) + 128;
+      if (out8 > 255) out8 = 255;
+      if (out8 < 0) out8 = 0;
+      *buffer++ = static_cast<uint8_t>(out8);
     }
   }
 
@@ -253,7 +265,8 @@ class KarplusStrong {
   }
 
  private:
-  uint8_t delay_line_[kKarplusBufferSize];
+  int16_t delay_line_[kKarplusBufferSize];  // 16-bit for smooth decay
+  int16_t lp_state_;                        // IIR low-pass state for damping
   uint16_t write_pos_;
   uint16_t delay_length_;
   uint8_t excited_;
