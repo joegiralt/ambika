@@ -57,12 +57,20 @@ for i in 1 2 3 4 5 6; do
 done
 echo "  VOICE1-6.BIN (voicecard: $(stat -c%s "$VOICECARD_BIN") bytes)"
 
+# Generate and copy factory patches
+echo ""
+echo "Generating factory patches..."
+PATCH_STAGING=$(mktemp -d)
+python3 tools/make_patches.py "$PATCH_STAGING"
+sudo mkdir -p "$SDCARD/PATCH/BANK/C"
+sudo cp "$PATCH_STAGING/PATCH/BANK/C/"*.PAT "$SDCARD/PATCH/BANK/C/" 2>/dev/null || true
+rm -rf "$PATCH_STAGING"
+
 sudo sync
 echo ""
 echo "Done. Safe to eject SD card."
 echo ""
 echo "To flash on Ambika:"
 echo "  1. Insert SD card"
-echo "  2. Go to OS info page (rightmost system page)"
-echo "  3. Press S1 to flash controller"
-echo "  4. After reboot, flash each voicecard with S4"
+echo "  2. Hold S8 during power-on to flash controller"
+echo "  3. Flash each voicecard with S4 from OS info page"
