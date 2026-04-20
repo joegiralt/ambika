@@ -464,6 +464,22 @@ void Ui::DoEvents() {
 }
 
 /* static */
+void Ui::ShowPreviousPage() {
+  // After exiting a system page (e.g. library), route to the correct
+  // engine page based on the current patch's waveform.
+  uint8_t shape = multi.part(state_.active_part).raw_patch_data()[0];
+  if (shape == WAVEFORM_FM4OP) {
+    ShowPage(PAGE_FM4OP);
+  } else if (shape == WAVEFORM_KS_PLUCK) {
+    ShowPage(PAGE_KS_PLUCK);
+  } else if (shape == WAVEFORM_WESTCOAST) {
+    ShowPage(PAGE_WESTCOAST);
+  } else {
+    ShowPage(most_recent_non_system_page_);
+  }
+}
+
+/* static */
 void Ui::ShowPage(UiPageNumber page, uint8_t initialize) {
   // Flush the event queue.
   queue_.Flush();

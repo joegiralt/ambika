@@ -128,18 +128,6 @@ uint8_t Library::OnIncrement(int8_t increment) {
         memcpy_P(name_, blank_patch_name, sizeof(name_));
       } else {
         is_edit_buffer_ = 0;
-        // Auto-switch to the right page for the loaded patch's engine.
-        if (location_.object == STORAGE_OBJECT_PATCH) {
-          uint8_t shape = multi.part(
-              ui.state().active_part).raw_patch_data()[0];
-          if (shape == WAVEFORM_FM4OP) {
-            ui.ShowPage(PAGE_FM4OP);
-          } else if (shape == WAVEFORM_KS_PLUCK) {
-            ui.ShowPage(PAGE_KS_PLUCK);
-          } else if (shape == WAVEFORM_WESTCOAST) {
-            ui.ShowPage(PAGE_WESTCOAST);
-          }
-        }
       }
       SaveLocation();
     }
