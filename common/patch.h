@@ -56,6 +56,13 @@ struct EnvelopeLfoSettings {
   uint8_t retrigger_mode;
 };
 
+struct ExtraEnvelopeSettings {
+  uint8_t attack;
+  uint8_t decay;
+  uint8_t sustain;
+  uint8_t release;
+};
+
 struct Modulation {
   uint8_t source;
   uint8_t destination;
@@ -158,19 +165,21 @@ enum ModulationSource {
   MOD_SRC_ENV_1,
   MOD_SRC_ENV_2,
   MOD_SRC_ENV_3,
-  
+  MOD_SRC_ENV_4,
+  MOD_SRC_ENV_5,
+  MOD_SRC_ENV_6,
+  MOD_SRC_ENV_7,
+
   MOD_SRC_LFO_1,
   MOD_SRC_LFO_2,
   MOD_SRC_LFO_3,
   MOD_SRC_LFO_4,
-  
+
   MOD_SRC_OP_1,
   MOD_SRC_OP_2,
   MOD_SRC_OP_3,
   MOD_SRC_OP_4,
-  
-  MOD_SRC_SEQ_1,
-  MOD_SRC_SEQ_2,
+
   MOD_SRC_ARP_STEP,
   
   MOD_SRC_VELOCITY,
@@ -230,8 +239,10 @@ enum FilterMode {
 };
 
 static const uint8_t kNumSyncedLfoRates = 15;
-static const uint8_t kNumEnvelopes = 3;
-static const uint8_t kNumLfos = kNumEnvelopes;
+static const uint8_t kNumEnvLfoSlots = 3;
+static const uint8_t kNumLfos = kNumEnvLfoSlots;
+static const uint8_t kNumTotalEnvelopes = 7;
+static const uint8_t kNumExtraEnvelopes = 4;
 static const uint8_t kNumModulations = 14;
 static const uint8_t kNumModifiers = 4;
 static const uint8_t kNumOscillators = 2;
@@ -258,7 +269,7 @@ struct Patch {
   int8_t filter_lfo;
   
   // Offset: 24-48
-  EnvelopeLfoSettings env_lfo[kNumEnvelopes];
+  EnvelopeLfoSettings env_lfo[kNumEnvLfoSlots];
 
   // Offset: 48-50
   uint8_t voice_lfo_shape;
@@ -272,6 +283,9 @@ struct Patch {
   
   // Offset: 104-112
   uint8_t padding[8];
+
+  // Offset: 112-128
+  ExtraEnvelopeSettings extra_env[kNumExtraEnvelopes];
 };
 
 typedef Patch PROGMEM prog_Patch;
@@ -324,7 +338,12 @@ enum PatchParameter {
   PRM_PATCH_MOD_OPERAND2,
   PRM_PATCH_MOD_OPERATOR,
 
-  PRM_PATCH_SLOP = 105
+  PRM_PATCH_SLOP = 105,
+
+  PRM_PATCH_EXTRA_ENV_ATTACK = 112,
+  PRM_PATCH_EXTRA_ENV_DECAY,
+  PRM_PATCH_EXTRA_ENV_SUSTAIN,
+  PRM_PATCH_EXTRA_ENV_RELEASE,
 };
 
 }  // namespace ambika
