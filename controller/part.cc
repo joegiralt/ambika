@@ -37,12 +37,12 @@ static const prog_uint16_t lfo_phase_increment_per_clock_tick[15] PROGMEM = {
 };
 
 static const prog_Patch init_patch PROGMEM = {
-  // Oscillators
-  WAVEFORM_SAW, 0, 0, 0,
-  WAVEFORM_SQUARE, 32, -12, 12,
-  
-  // Mixer
-  32, OP_SUM, 31, WAVEFORM_SUB_OSC_SQUARE_1, 0, 0, 0, 0, 
+  // Oscillators (FM mode: algo, ratios, waveforms packed)
+  WAVEFORM_SAW, 1, 4, 0,     // osc0: shape=SAW(fallback), param=algo1, range=R_100, det=0
+  0, 0, 4, 0,                // osc1: wav1|wav2=0(sine), wav3|wav4=0, range=R_100, det=0
+
+  // Mixer (FM mode: ratios, levels)
+  4, 0, 4, 0, 127, 120, 115, 112,
 
   // Filter
   96, 0, 0, 0, 0, 0, 24, 0,
@@ -76,8 +76,8 @@ static const prog_Patch init_patch PROGMEM = {
   MOD_SRC_LFO_3, MOD_SRC_ENV_4, 0,
   MOD_SRC_ENV_4, MOD_SRC_ENV_5, 0,
   
-  // Padding
-  0, 0, 0, 0, 0, 0, 0, 0,
+  // Padding: [0]=feedback, [1]=unused, [2]=engine (1=FM), [3-7]=unused
+  0, 0, ENGINE_FM4OP, 0, 0, 0, 0, 0,
 
   // Extra envelope-LFO settings (env4-7: ADSR + LFO shape/rate/curve/retrigger)
   0, 40, 20, 60, LFO_WAVEFORM_TRIANGLE, 0, 0, 0,
