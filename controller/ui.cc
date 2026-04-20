@@ -357,7 +357,20 @@ void Ui::DoEvents() {
             idx += (static_cast<int8_t>(e.value) > 0) ? 1 : -1;
             if (idx < 0) idx = 3;
             if (idx > 3) idx = 0;
-            patch[0] = pgm_read_byte(&modes[idx]);
+            uint8_t new_mode = pgm_read_byte(&modes[idx]);
+            patch[0] = new_mode;
+            // When switching to classic, reset mixer fields that special
+            // modes repurpose (offsets 8-15).
+            if (new_mode <= WAVEFORM_FILTERED_NOISE) {
+              patch[8] = 32;   // mix_balance (center)
+              patch[9] = 0;    // mix_op (sum)
+              patch[10] = 0;   // mix_parameter
+              patch[11] = 0;   // mix_sub_osc_shape
+              patch[12] = 0;   // mix_sub_osc level
+              patch[13] = 0;   // mix_noise level
+              patch[14] = 0;   // mix_fuzz
+              patch[15] = 0;   // mix_crush
+            }
             multi.mutable_part(state_.active_part)->TouchPatch();
             ShowPage(static_cast<UiPageNumber>(pgm_read_byte(&pages[idx])));
           } else {
