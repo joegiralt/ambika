@@ -40,9 +40,9 @@ uint8_t Multi::flags_;
 /* </static> */
 
 static const prog_MultiData init_settings PROGMEM = {
-  // Parts mappings.
-  1, 0, 127, 0x15,
-  2, 0, 127, 0x2a,
+  // Parts mappings: part 1 gets all 6 voices.
+  1, 0, 127, 0x3F,
+  2, 0, 127, 0,
   3, 0, 127, 0,
   4, 0, 127, 0,
   5, 0, 127, 0,
