@@ -33,6 +33,7 @@
 #include "controller/ui_pages/library.h"
 #include "controller/ui_pages/os_info_page.h"
 #include "controller/ui_pages/parameter_editor.h"
+#include "controller/ui_pages/env_page.h"
 #include "controller/ui_pages/fm_page.h"
 #include "controller/ui_pages/ks_page.h"
 #include "controller/ui_pages/wc_page.h"
@@ -64,8 +65,8 @@ const prog_PageInfo page_registry[] PROGMEM = {
   },
   
   { PAGE_ENV_LFO,
-    &ParameterEditor::event_handlers_,
-    { 24, 30, 31, 73, 25, 26, 27, 28 },
+    &EnvPage::event_handlers_,
+    { 0, 0, 0, 0, 0, 0, 0, 0 },
     PAGE_VOICE_LFO, 2, 0xf0,
   },
 
