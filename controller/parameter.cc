@@ -189,12 +189,6 @@ void Parameter::PrintValue(uint8_t value, char* buffer, uint8_t width) const {
       }
       break;
 
-    case UNIT_MODULATION_SOURCE:
-      if (width > 5) {
-        text = STR_RES_ENV_1;
-      }
-      break;
-
     case UNIT_MODULATION_DESTINATION:
       if (width > 5) {
         text = STR_RES_PARAM_1;
@@ -251,6 +245,37 @@ void Parameter::PrintValue(uint8_t value, char* buffer, uint8_t width) const {
       default: name = PSTR("?"); break;
     }
     strncpy_P(buffer, name, width);
+    AlignRight(buffer, width);
+    return;
+  }
+
+  // Mod source names — packed PROGMEM tables, 5 chars each (short) / 7 chars each (long).
+  // Order matches ModulationSource enum.
+  if (unit == UNIT_MODULATION_SOURCE) {
+    static const prog_char mod_src_short[] PROGMEM =
+        "env1\0" "env2\0" "env3\0" "env4\0" "env5\0" "env6\0" "env7\0"
+        "lfo1\0" "lfo2\0" "lfo3\0" "lfo4\0"
+        "mod1\0" "mod2\0" "mod3\0" "mod4\0"
+        "arp \0" "velo\0" "aftr\0" "bend\0" "mwhl\0" "whl2\0" "pdal\0"
+        "note\0" "gate\0" "nois\0" "rand\0"
+        "=256\0" "=128\0" "=64 \0" "=32 \0" "=16 \0" "=8  \0" "=4  \0";
+    static const prog_char mod_src_long[] PROGMEM =
+        "env 1\0\0" "env 2\0\0" "env 3\0\0" "env 4\0\0"
+        "env 5\0\0" "env 6\0\0" "env 7\0\0"
+        "lfo 1\0\0" "lfo 2\0\0" "lfo 3\0\0" "lfo 4\0\0"
+        "mod. 1\0" "mod. 2\0" "mod. 3\0" "mod. 4\0"
+        "arp   \0" "velo  \0" "afttch\0" "bender\0"
+        "mwheel\0" "wheel2\0" "pedal \0"
+        "note  \0" "gate  \0" "noise \0" "random\0"
+        "= 256 \0" "= 128 \0" "= 64  \0" "= 32  \0"
+        "= 16  \0" "= 8   \0" "= 4   \0";
+    if (value < MOD_SRC_LAST) {
+      if (width > 5) {
+        memcpy_P(buffer, mod_src_long + value * 7, width < 7 ? width : 7);
+      } else {
+        memcpy_P(buffer, mod_src_short + value * 5, width < 5 ? width : 5);
+      }
+    }
     AlignRight(buffer, width);
     return;
   }
