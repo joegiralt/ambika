@@ -76,6 +76,19 @@ const prog_uint16_t Fm4Op::tx81z_ratios_[] PROGMEM = {
  5225, 5315, 5427, 5627, 5757, 6029, 6200, 6643,
 };
 
+// TX81Z-style exponential output level curve (0.75 dB/step).
+// level 0 = silence, level 127 = full amplitude (255).
+const prog_uint8_t Fm4Op::level_to_amplitude_[128] PROGMEM = {
+    0,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,
+    1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,
+    1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,
+    1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,
+    1,   1,   1,   1,   2,   2,   2,   2,   2,   2,   3,   3,   3,   3,   4,   4,
+    4,   5,   5,   6,   6,   7,   7,   8,   9,  10,  10,  11,  12,  14,  15,  16,
+   18,  19,  21,  23,  25,  27,  29,  32,  35,  38,  42,  45,  49,  54,  59,  64,
+   70,  76,  83,  90,  99, 108, 117, 128, 139, 152, 166, 181, 197, 215, 234, 255,
+};
+
 // 512-entry 16-bit sine table for FM synthesis.
 // Phase-shifted to match original table (trough at index 0).
 const prog_uint16_t wav_res_sine16[] PROGMEM = {
@@ -529,18 +542,18 @@ inline void Voice::RenderOscillators() {
       }
     }
 
-    // Operator output levels.
+    // Operator output levels — TX81Z signal chain:
+    // 1. Exponential curve on raw patch level (TL → amplitude)
+    // 2. Multiply by per-op envelope (linear amplitude modulation)
     uint8_t op_level[4];
     op_level[0] = patch_.mix_sub_osc;
     op_level[1] = patch_.mix_noise;
     op_level[2] = patch_.mix_fuzz;
     op_level[3] = patch_.mix_crush;
-
-    // Per-operator envelopes: env4-7 shape op1-4 levels (TX81Z style).
-    op_level[0] = U8U8MulShift8(op_level[0], modulation_sources_[MOD_SRC_ENV_4]);
-    op_level[1] = U8U8MulShift8(op_level[1], modulation_sources_[MOD_SRC_ENV_5]);
-    op_level[2] = U8U8MulShift8(op_level[2], modulation_sources_[MOD_SRC_ENV_6]);
-    op_level[3] = U8U8MulShift8(op_level[3], modulation_sources_[MOD_SRC_ENV_7]);
+    for (uint8_t i = 0; i < 4; ++i) {
+      uint8_t amp = pgm_read_byte(&Fm4Op::level_to_amplitude_[op_level[i]]);
+      op_level[i] = U8U8MulShift8(amp, modulation_sources_[MOD_SRC_ENV_4 + i]);
+    }
 
     // Algorithm from osc[0].parameter.
     uint8_t algorithm = patch_.osc[0].parameter;

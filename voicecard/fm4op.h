@@ -107,9 +107,22 @@ class Fm4Op {
     feedback_state_[1] = 0;
   }
 
-  // Scale modulation: operator output × level, attenuated for musical range.
-  static inline int16_t ScaleMod(uint8_t op_out, uint8_t level) {
-    return (static_cast<int16_t>(op_out - 128) * level) >> 4;
+  // TX81Z-style exponential output level curve.
+  // 0.75 dB/step: level 0 = silence, level 127 = full (255).
+  // Most of the useful modulation range lives in levels 90-127.
+  static const prog_uint8_t level_to_amplitude_[128] PROGMEM;
+
+  // Scale modulator output by its amplitude.
+  // Caller pre-applies exponential curve + envelope before passing amp.
+  // No shift — max mod index ~3.1 radians (8-bit ceiling).
+  static inline int16_t ScaleMod(uint8_t op_out, uint8_t amp) {
+    return static_cast<int16_t>(op_out - 128) * amp;
+  }
+
+  // Scale carrier output by its amplitude (maintains center at 128).
+  // Caller pre-applies exponential curve + envelope before passing amp.
+  static inline uint8_t ScaleCarrier(uint8_t op_out, uint8_t amp) {
+    return 128 + ((static_cast<int16_t>(op_out - 128) * amp) >> 8);
   }
 
   // Compute the output of a single operator waveform using 16-bit sine.
@@ -186,22 +199,25 @@ class Fm4Op {
         op_[i].phase += op_[i].phase_increment;
       }
 
-      // Apply feedback to op4 (same as TX81Z convention).
-      // Feedback state stored centered at 0 (signed).
-      int16_t fb = (feedback_state_[0] + feedback_state_[1]) >> 1;
-      int16_t fb_mod = (fb * static_cast<int16_t>(feedback)) >> 4;
+      // 16-bit feedback state for evolving, chaotic oscillation.
+      // Higher precision prevents the feedback loop from locking into
+      // a fixed repeating pattern (the TX81Z uses 14-bit internally).
+      int32_t fb = feedback_state_[0] + feedback_state_[1];
+      int32_t fb_mod = (fb * feedback) >> 6;
 
-      uint8_t op4_out = RenderWaveform(op_waveform[3],
-          op_[3].phase + static_cast<uint16_t>(fb_mod));
-      // Store centered at 0 for proper signed feedback.
+      // Render op4 waveform, store 16-bit precision for feedback path.
+      uint16_t op4_phase = op_[3].phase + static_cast<uint16_t>(fb_mod);
+      uint16_t op4_raw = InterpolateSine16(op4_phase);
+      uint8_t op4_out = RenderWaveform(op_waveform[3], op4_phase);
       feedback_state_[1] = feedback_state_[0];
-      feedback_state_[0] = static_cast<int8_t>(op4_out - 128);
+      feedback_state_[0] = static_cast<int16_t>(op4_raw - 32768);
 
       // Render remaining operators and route per algorithm.
+      // Carrier outputs are scaled by their level (per-op envelope control).
       uint8_t out;
       switch (algorithm) {
         case FM_ALG_1: {
-          // 4->3->2->1->out (full serial)
+          // 4->3->2->1->out (full serial, op1 = carrier)
           int16_t mod3 = ScaleMod(op4_out, op_level[3]);
           uint8_t op3_out = RenderWaveform(op_waveform[2],
               op_[2].phase + mod3);
@@ -209,13 +225,13 @@ class Fm4Op {
           uint8_t op2_out = RenderWaveform(op_waveform[1],
               op_[1].phase + mod2);
           int16_t mod1 = ScaleMod(op2_out, op_level[1]);
-          out = RenderWaveform(op_waveform[0],
-              op_[0].phase + mod1);
+          out = ScaleCarrier(RenderWaveform(op_waveform[0],
+              op_[0].phase + mod1), op_level[0]);
           break;
         }
 
         case FM_ALG_2: {
-          // (3+4)->2->1->out
+          // (3+4)->2->1->out (op1 = carrier)
           uint8_t op3_out = RenderWaveform(op_waveform[2],
               op_[2].phase);
           int16_t mod2 = ScaleMod(op4_out, op_level[3]) +
@@ -223,13 +239,13 @@ class Fm4Op {
           uint8_t op2_out = RenderWaveform(op_waveform[1],
               op_[1].phase + mod2);
           int16_t mod1 = ScaleMod(op2_out, op_level[1]);
-          out = RenderWaveform(op_waveform[0],
-              op_[0].phase + mod1);
+          out = ScaleCarrier(RenderWaveform(op_waveform[0],
+              op_[0].phase + mod1), op_level[0]);
           break;
         }
 
         case FM_ALG_3: {
-          // (4->3) + 2 -> 1->out
+          // (4->3) + 2 -> 1->out (op1 = carrier)
           int16_t mod3 = ScaleMod(op4_out, op_level[3]);
           uint8_t op3_out = RenderWaveform(op_waveform[2],
               op_[2].phase + mod3);
@@ -237,75 +253,76 @@ class Fm4Op {
               op_[1].phase);
           int16_t mod1 = ScaleMod(op3_out, op_level[2]) +
               ScaleMod(op2_out, op_level[1]);
-          out = RenderWaveform(op_waveform[0],
-              op_[0].phase + mod1);
+          out = ScaleCarrier(RenderWaveform(op_waveform[0],
+              op_[0].phase + mod1), op_level[0]);
           break;
         }
 
         case FM_ALG_4: {
-          // (4->3) + (2->1) -> out (two parallel pairs)
+          // (4->3) + (2->1) -> out (op1, op3 = carriers)
           int16_t mod3 = ScaleMod(op4_out, op_level[3]);
-          uint8_t op3_out = RenderWaveform(op_waveform[2],
-              op_[2].phase + mod3);
+          uint8_t op3_out = ScaleCarrier(RenderWaveform(op_waveform[2],
+              op_[2].phase + mod3), op_level[2]);
           uint8_t op2_out = RenderWaveform(op_waveform[1],
               op_[1].phase);
           int16_t mod1 = ScaleMod(op2_out, op_level[1]);
-          uint8_t op1_out = RenderWaveform(op_waveform[0],
-              op_[0].phase + mod1);
+          uint8_t op1_out = ScaleCarrier(RenderWaveform(op_waveform[0],
+              op_[0].phase + mod1), op_level[0]);
           out = (op1_out >> 1) + (op3_out >> 1);
           break;
         }
 
         case FM_ALG_5: {
-          // (4->2) + (4->3->1) -> out
+          // (4->3->1) + (4->2) -> out (op1, op2 = carriers)
           int16_t mod3 = ScaleMod(op4_out, op_level[3]);
           uint8_t op3_out = RenderWaveform(op_waveform[2],
               op_[2].phase + mod3);
           int16_t mod1 = ScaleMod(op3_out, op_level[2]);
-          uint8_t op1_out = RenderWaveform(op_waveform[0],
-              op_[0].phase + mod1);
+          uint8_t op1_out = ScaleCarrier(RenderWaveform(op_waveform[0],
+              op_[0].phase + mod1), op_level[0]);
           int16_t mod2 = ScaleMod(op4_out, op_level[3]);
-          uint8_t op2_out = RenderWaveform(op_waveform[1],
-              op_[1].phase + mod2);
+          uint8_t op2_out = ScaleCarrier(RenderWaveform(op_waveform[1],
+              op_[1].phase + mod2), op_level[1]);
           out = (op1_out >> 1) + (op2_out >> 1);
           break;
         }
 
         case FM_ALG_6: {
-          // 4->(1+2+3)->out (one mod, three carriers)
+          // 4->(1+2+3)->out (op1, op2, op3 = carriers)
           int16_t mod = ScaleMod(op4_out, op_level[3]);
-          uint8_t op1_out = RenderWaveform(op_waveform[0],
-              op_[0].phase + mod);
-          uint8_t op2_out = RenderWaveform(op_waveform[1],
-              op_[1].phase + mod);
-          uint8_t op3_out = RenderWaveform(op_waveform[2],
-              op_[2].phase + mod);
-          out = (op1_out / 3) + (op2_out / 3) + (op3_out / 3);
+          uint8_t op1_out = ScaleCarrier(RenderWaveform(op_waveform[0],
+              op_[0].phase + mod), op_level[0]);
+          uint8_t op2_out = ScaleCarrier(RenderWaveform(op_waveform[1],
+              op_[1].phase + mod), op_level[1]);
+          uint8_t op3_out = ScaleCarrier(RenderWaveform(op_waveform[2],
+              op_[2].phase + mod), op_level[2]);
+          out = (op1_out >> 2) + (op2_out >> 2) + (op3_out >> 2) + 32;
           break;
         }
 
         case FM_ALG_7: {
-          // (4->1)+2+3->out
+          // (4->1)+2+3->out (op1, op2, op3 = carriers)
           int16_t mod1 = ScaleMod(op4_out, op_level[3]);
-          uint8_t op1_out = RenderWaveform(op_waveform[0],
-              op_[0].phase + mod1);
-          uint8_t op2_out = RenderWaveform(op_waveform[1],
-              op_[1].phase);
-          uint8_t op3_out = RenderWaveform(op_waveform[2],
-              op_[2].phase);
-          out = (op1_out / 3) + (op2_out / 3) + (op3_out / 3);
+          uint8_t op1_out = ScaleCarrier(RenderWaveform(op_waveform[0],
+              op_[0].phase + mod1), op_level[0]);
+          uint8_t op2_out = ScaleCarrier(RenderWaveform(op_waveform[1],
+              op_[1].phase), op_level[1]);
+          uint8_t op3_out = ScaleCarrier(RenderWaveform(op_waveform[2],
+              op_[2].phase), op_level[2]);
+          out = (op1_out >> 2) + (op2_out >> 2) + (op3_out >> 2) + 32;
           break;
         }
 
         case FM_ALG_8:
         default: {
           // 1+2+3+4->out (all carriers, additive)
-          uint8_t op1_out = RenderWaveform(op_waveform[0],
-              op_[0].phase);
-          uint8_t op2_out = RenderWaveform(op_waveform[1],
-              op_[1].phase);
-          uint8_t op3_out = RenderWaveform(op_waveform[2],
-              op_[2].phase);
+          uint8_t op1_out = ScaleCarrier(RenderWaveform(op_waveform[0],
+              op_[0].phase), op_level[0]);
+          uint8_t op2_out = ScaleCarrier(RenderWaveform(op_waveform[1],
+              op_[1].phase), op_level[1]);
+          uint8_t op3_out = ScaleCarrier(RenderWaveform(op_waveform[2],
+              op_[2].phase), op_level[2]);
+          op4_out = ScaleCarrier(op4_out, op_level[3]);
           out = (op1_out >> 2) + (op2_out >> 2) +
                 (op3_out >> 2) + (op4_out >> 2);
           break;
@@ -343,7 +360,7 @@ class Fm4Op {
 
  private:
   FmOperator op_[4];
-  int8_t feedback_state_[2];
+  int16_t feedback_state_[2];
 
   DISALLOW_COPY_AND_ASSIGN(Fm4Op);
 };
