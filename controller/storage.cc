@@ -310,6 +310,7 @@ void Storage::TouchObject(const StorageLocation& location) {
   // object is freshly loaded and has received no user changes.
   switch (location.object) {
     case STORAGE_OBJECT_PATCH:
+      multi.mutable_part(location.part)->AllSoundOff();
       multi.mutable_part(location.part)->TouchPatch();
       break;
 
