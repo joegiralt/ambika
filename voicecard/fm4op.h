@@ -93,7 +93,7 @@ class Fm4Op {
 
   // Scale modulation: operator output × level, attenuated for musical range.
   static inline int16_t ScaleMod(uint8_t op_out, uint8_t level) {
-    return (static_cast<int16_t>(op_out - 128) * level) >> 2;
+    return (static_cast<int16_t>(op_out - 128) * level) >> 4;
   }
 
   // Compute the output of a single operator waveform.
