@@ -141,8 +141,15 @@ class KarplusStrong {
       return;
     }
 
+    // Scale damping by delay length — shorter strings (higher notes) get less
+    // damping so the decay tail stays consistent across the keyboard.
     uint8_t coeff = 32 + (damping << 1);
     if (coeff < 32) coeff = 32;
+    if (delay_length_ < 64) {
+      coeff = coeff >> 2;  // Very high notes: 1/4 damping
+    } else if (delay_length_ < 128) {
+      coeff = coeff >> 1;  // High notes: 1/2 damping
+    }
     uint8_t decay_amount = decay >> 3;
 
     // Advance ensemble LFO.
