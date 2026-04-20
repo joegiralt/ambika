@@ -447,6 +447,12 @@ inline void Voice::RenderOscillators() {
     op_level[2] = patch_.mix_fuzz;
     op_level[3] = patch_.mix_crush;
 
+    // Per-operator envelopes: env4-7 shape op1-4 levels (TX81Z style).
+    op_level[0] = U8U8MulShift8(op_level[0], modulation_sources_[MOD_SRC_ENV_4]);
+    op_level[1] = U8U8MulShift8(op_level[1], modulation_sources_[MOD_SRC_ENV_5]);
+    op_level[2] = U8U8MulShift8(op_level[2], modulation_sources_[MOD_SRC_ENV_6]);
+    op_level[3] = U8U8MulShift8(op_level[3], modulation_sources_[MOD_SRC_ENV_7]);
+
     // Modulate total FM depth via PARAMETER_1 mod destination.
     uint8_t depth_mod = U15ShiftRight7(dst_[MOD_DST_PARAMETER_1]);
     for (uint8_t i = 0; i < 4; ++i) {
