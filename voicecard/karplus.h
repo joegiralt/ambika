@@ -68,20 +68,25 @@ class KarplusStrong {
       int16_t sample;
       switch (excitation_type) {
         case KS_EXC_CLICK:
-          sample = (i < 4) ? 16384 : 0;
+          // Sharp impulse — very percussive attack.
+          sample = (i < 2) ? 16383 : ((i < 4) ? -16383 : 0);
           break;
         case KS_EXC_BRIGHT:
+          // Full-range noise with extra high frequency content.
           sample = (static_cast<int16_t>(Random::GetByte()) - 128) << 7;
+          sample += (static_cast<int16_t>(Random::GetByte()) - 128) << 5;
           break;
         case KS_EXC_DARK:
+          // Heavily filtered noise — warm, muted pluck.
           if (i > 0) {
-            sample = ((static_cast<int16_t>(Random::GetByte()) - 128) << 6)
-                + (delay_line_[i - 1] >> 1);
+            sample = (delay_line_[i - 1] * 3 +
+                ((static_cast<int16_t>(Random::GetByte()) - 128) << 6)) >> 2;
           } else {
-            sample = (static_cast<int16_t>(Random::GetByte()) - 128) << 7;
+            sample = (static_cast<int16_t>(Random::GetByte()) - 128) << 5;
           }
           break;
         default:
+          // Standard noise burst.
           sample = (static_cast<int16_t>(Random::GetByte()) - 128) << 7;
           break;
       }
@@ -150,7 +155,7 @@ class KarplusStrong {
     } else if (delay_length_ < 128) {
       coeff = coeff >> 1;  // High notes: 1/2 damping
     }
-    uint8_t decay_amount = decay >> 3;
+    uint8_t decay_amount = decay >> 1;  // 0-63 for noticeable decay control
 
     // Advance ensemble LFO.
     uint16_t lfo_inc = static_cast<uint16_t>(ens_rate + 1) << 4;
@@ -185,13 +190,15 @@ class KarplusStrong {
         filtered -= (filtered * decay_amount) >> 8;
       }
 
-      // Body resonance.
+      // Body resonance: mix with signal from 1/3 through the delay line.
+      // Creates a comb-filter effect that adds harmonic richness.
       if (body > 4) {
-        uint16_t body_pos = read_pos + (delay_length_ >> 1);
+        uint16_t body_pos = read_pos + (delay_length_ / 3);
         if (body_pos >= delay_length_) body_pos -= delay_length_;
         int16_t body_sample = delay_line_[body_pos];
-        filtered = (static_cast<int32_t>(filtered) * (256 - body) +
-                    static_cast<int32_t>(body_sample) * body) >> 8;
+        uint8_t body_amt = body << 1;  // Double the range for stronger effect.
+        filtered = (static_cast<int32_t>(filtered) * (256 - body_amt) +
+                    static_cast<int32_t>(body_sample) * body_amt) >> 8;
       }
 
       // Extra feedback.
