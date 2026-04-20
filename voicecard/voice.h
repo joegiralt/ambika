@@ -153,6 +153,7 @@ class Voice {
   static Fm4Op fm4op_;
   static KarplusStrong karplus_;
   static WestCoast westcoast_;
+  static uint8_t last_engine_;
 
   DISALLOW_COPY_AND_ASSIGN(Voice);
 };

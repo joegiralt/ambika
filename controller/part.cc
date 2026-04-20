@@ -128,10 +128,13 @@ void Part::Touch() {
 }
 
 void Part::TouchPatch() {
-  // Sanitize waveform values — clamp out-of-range shapes from old patches.
-  for (uint8_t i = 0; i < kNumOscillators; ++i) {
-    if (patch_.osc[i].shape >= WAVEFORM_LAST) {
-      patch_.osc[i].shape = WAVEFORM_NONE;
+  // Sanitize waveform values — only in classic mode.
+  // Special modes repurpose osc[1].shape for packed FM waveform nibbles.
+  if (patch_.padding[2] == ENGINE_CLASSIC) {
+    for (uint8_t i = 0; i < kNumOscillators; ++i) {
+      if (patch_.osc[i].shape >= WAVEFORM_LAST) {
+        patch_.osc[i].shape = WAVEFORM_NONE;
+      }
     }
   }
   flags_ = FLAG_HAS_CHANGE;

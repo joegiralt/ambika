@@ -61,6 +61,7 @@ uint8_t Voice::dummy_sync_state_[kAudioBlockSize];
 Fm4Op Voice::fm4op_;
 KarplusStrong Voice::karplus_;
 WestCoast Voice::westcoast_;
+uint8_t Voice::last_engine_ = 0xFF;
 
 // TX81Z frequency ratios as 8.8 fixed-point (ratio × 256).
 const prog_uint16_t Fm4Op::tx81z_ratios_[] PROGMEM = {
@@ -489,8 +490,17 @@ inline void Voice::RenderOscillators() {
   base_pitch += (dst_[MOD_DST_OSC_1_2_COARSE] - 8192) >> 4;
   base_pitch += (dst_[MOD_DST_OSC_1_2_FINE] - 8192) >> 7;
 
+  // Reset engine state when engine type changes.
+  uint8_t engine = patch_.padding[2];
+  if (engine != last_engine_) {
+    last_engine_ = engine;
+    fm4op_.Init();
+    karplus_.Init();
+    westcoast_.Init();
+  }
+
   // --- 4-op FM mode ---
-  if (patch_.padding[2] == ENGINE_FM4OP) {
+  if (engine == ENGINE_FM4OP) {
     uint16_t base_increment = ComputePhaseIncrement(base_pitch);
 
     // Set up operator phase increments from patch fields.
@@ -549,7 +559,7 @@ inline void Voice::RenderOscillators() {
   }
 
   // --- Karplus-Strong mode ---
-  if (patch_.padding[2] == ENGINE_KS_PLUCK) {
+  if (engine == ENGINE_KS_PLUCK) {
     int16_t ks_pitch = base_pitch + S8U8Mul(patch_.osc[0].range, 128)
         + patch_.osc[0].detune;
     uint16_t ks_increment = ComputePhaseIncrement(ks_pitch);
@@ -576,7 +586,7 @@ inline void Voice::RenderOscillators() {
   }
 
   // --- West Coast mode ---
-  if (patch_.padding[2] == ENGINE_WESTCOAST) {
+  if (engine == ENGINE_WESTCOAST) {
     int16_t wc_pitch = base_pitch + S8U8Mul(patch_.osc[0].range, 128)
         + patch_.osc[0].detune;
     uint16_t wc_increment = ComputePhaseIncrement(wc_pitch);
