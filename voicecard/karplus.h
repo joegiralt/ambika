@@ -125,10 +125,14 @@ class KarplusStrong {
   }
 
   void SetPitch(uint16_t phase_increment) {
-    if (phase_increment < 256) {
-      phase_increment = 256;
+    // delay_length = sample_rate / frequency
+    // phase_increment represents frequency as a fraction of the sample rate.
+    // For accurate pitch: len = 65536 / phase_increment (full 16-bit division).
+    if (phase_increment < 1) {
+      phase_increment = 1;
     }
-    uint16_t len = 65535u / (phase_increment >> 8);
+    uint16_t len = static_cast<uint16_t>(
+        static_cast<uint32_t>(65536) / phase_increment);
     if (len < 2) len = 2;
     if (len >= kKarplusBufferSize) len = kKarplusBufferSize - 1;
     delay_length_ = len;
