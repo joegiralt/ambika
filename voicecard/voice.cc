@@ -77,12 +77,8 @@ const prog_uint16_t Fm4Op::tx81z_ratios_[] PROGMEM = {
 };
 
 // TX81Z-style exponential output level curve (0.75 dB/step).
-// level 0 = silence, level 127 = full amplitude (255).
-const prog_uint8_t Fm4Op::level_to_amplitude_[128] PROGMEM = {
-    0,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,
-    1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,
-    1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,
-    1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,
+// Upper 64 entries (levels 64-127). Levels 0-63 handled by LevelToAmplitude().
+const prog_uint8_t Fm4Op::level_to_amplitude_hi_[64] PROGMEM = {
     1,   1,   1,   1,   2,   2,   2,   2,   2,   2,   3,   3,   3,   3,   4,   4,
     4,   5,   5,   6,   6,   7,   7,   8,   9,  10,  10,  11,  12,  14,  15,  16,
    18,  19,  21,  23,  25,  27,  29,  32,  35,  38,  42,  45,  49,  54,  59,  64,
@@ -551,7 +547,7 @@ inline void Voice::RenderOscillators() {
     op_level[2] = patch_.mix_fuzz;
     op_level[3] = patch_.mix_crush;
     for (uint8_t i = 0; i < 4; ++i) {
-      uint8_t amp = pgm_read_byte(&Fm4Op::level_to_amplitude_[op_level[i]]);
+      uint8_t amp = Fm4Op::LevelToAmplitude(op_level[i]);
       op_level[i] = U8U8MulShift8(amp, modulation_sources_[MOD_SRC_ENV_4 + i]);
     }
 
