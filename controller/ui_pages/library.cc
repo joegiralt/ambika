@@ -311,6 +311,15 @@ void Library::UpdateScreen() {
   memcpy(&buffer[20], name_, sizeof(name_) - 1);
   AlignLeft(&buffer[20], sizeof(name_) - 1);
 
+  // Show engine type after patch name: VA/FM/KS/WC
+  if (location_.object == STORAGE_OBJECT_PATCH) {
+    uint8_t eng = multi.part(ui.state().active_part).raw_patch_data()[106];
+    static const prog_char eng_names[] PROGMEM = "VA" "FM" "KS" "WC";
+    if (eng < ENGINE_LAST) {
+      memcpy_P(&buffer[37], eng_names + eng * 2, 2);
+    }
+  }
+
   // Second line: buttons
   if (action_ == LIBRARY_ACTION_BROWSE) {
     buffer = display.line_buffer(1) + 1;

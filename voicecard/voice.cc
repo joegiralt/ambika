@@ -491,22 +491,7 @@ inline void Voice::RenderOscillators() {
   base_pitch += (dst_[MOD_DST_OSC_1_2_COARSE] - 8192) >> 4;
   base_pitch += (dst_[MOD_DST_OSC_1_2_FINE] - 8192) >> 7;
 
-  // Diagnostic: rx_led shows engine type (note_led is used by note handler).
-  // classic=off, FM=on, KS=slow blink, WC=fast blink
   uint8_t engine = patch_.padding[2];
-  {
-    static uint8_t diag_counter = 0;
-    ++diag_counter;
-    if (engine == ENGINE_FM4OP) {
-      rx_led.High();
-    } else if (engine == ENGINE_KS_PLUCK) {
-      if (diag_counter & 0x40) rx_led.High(); else rx_led.Low();
-    } else if (engine == ENGINE_WESTCOAST) {
-      if (diag_counter & 0x10) rx_led.High(); else rx_led.Low();
-    } else {
-      rx_led.Low();
-    }
-  }
 
   // Reset engine state when engine type changes.
   if (engine != last_engine_) {
