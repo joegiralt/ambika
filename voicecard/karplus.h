@@ -64,8 +64,8 @@ class KarplusStrong {
 
   // Excite the string.
   void Trigger(uint8_t excitation_type, uint8_t color, uint8_t position) {
-    // Fill delay line with 16-bit excitation (centered at 0).
-    for (uint16_t i = 0; i < delay_length_; ++i) {
+    // Fill the ENTIRE buffer — SetPitch may change delay_length_ after this.
+    for (uint16_t i = 0; i < kKarplusBufferSize; ++i) {
       int16_t sample;
       switch (excitation_type) {
         case KS_EXC_CLICK:
@@ -96,9 +96,9 @@ class KarplusStrong {
 
     // Pluck position comb filter.
     if (position > 4) {
-      uint16_t notch_period = (delay_length_ * position) >> 7;
-      if (notch_period > 1 && notch_period < delay_length_) {
-        for (uint16_t i = 0; i < delay_length_ - notch_period; ++i) {
+      uint16_t notch_period = (kKarplusBufferSize * position) >> 7;
+      if (notch_period > 1 && notch_period < kKarplusBufferSize) {
+        for (uint16_t i = 0; i < kKarplusBufferSize - notch_period; ++i) {
           delay_line_[i] = (delay_line_[i] + delay_line_[i + notch_period]) >> 1;
         }
       }
@@ -107,7 +107,7 @@ class KarplusStrong {
     // Excitation color low-pass.
     uint8_t filter_passes = (127 - color) >> 4;
     for (uint8_t pass = 0; pass < filter_passes; ++pass) {
-      for (uint16_t i = 1; i < delay_length_; ++i) {
+      for (uint16_t i = 1; i < kKarplusBufferSize; ++i) {
         delay_line_[i] = (delay_line_[i] >> 1) + (delay_line_[i - 1] >> 1);
       }
     }
