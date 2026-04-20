@@ -15,6 +15,7 @@
 
 #include "voicecard/oscillator.h"
 
+#include "voicecard/fm4op.h"
 #include "voicecard/voicecard.h"
 
 namespace ambika {
@@ -111,23 +112,26 @@ void Oscillator::RenderBandlimitedPwm(uint8_t* buffer) {
 // The position is determined by the note pitch, to prevent aliasing.
 
 void Oscillator::RenderSimpleWavetable(uint8_t* buffer) {
+  // Pure sine uses the 16-bit table for higher quality.
+  if (shape_ == WAVEFORM_SINE) {
+    BEGIN_SAMPLE_LOOP
+      UPDATE_PHASE_MORE_REGISTERS
+      *buffer++ = InterpolateSine16(phase.integral) >> 8;
+    END_SAMPLE_LOOP
+    return;
+  }
+
   uint8_t balance_index = U8Swap4(note_);
   uint8_t gain_2 = balance_index & 0xf0;
   uint8_t gain_1 = ~gain_2;
-  uint8_t wave_1_index, wave_2_index;
-  if (shape_ != WAVEFORM_SINE) {
-    uint8_t wave_index = balance_index & 0xf;
-    uint8_t base_resource_id = shape_ == WAVEFORM_SAW ?
-        WAV_RES_BANDLIMITED_SAW_0 :
-        (shape_ == WAVEFORM_SQUARE ? WAV_RES_BANDLIMITED_SQUARE_0  : 
-        WAV_RES_BANDLIMITED_TRIANGLE_0);
-    wave_1_index = base_resource_id + wave_index;
-    wave_index = U8AddClip(wave_index, 1, kNumZonesFullSampleRate);
-    wave_2_index = base_resource_id + wave_index;
-  } else {
-    wave_1_index = WAV_RES_SINE;
-    wave_2_index = WAV_RES_SINE;
-  }
+  uint8_t wave_index = balance_index & 0xf;
+  uint8_t base_resource_id = shape_ == WAVEFORM_SAW ?
+      WAV_RES_BANDLIMITED_SAW_0 :
+      (shape_ == WAVEFORM_SQUARE ? WAV_RES_BANDLIMITED_SQUARE_0  :
+      WAV_RES_BANDLIMITED_TRIANGLE_0);
+  uint8_t wave_1_index = base_resource_id + wave_index;
+  wave_index = U8AddClip(wave_index, 1, kNumZonesFullSampleRate);
+  uint8_t wave_2_index = base_resource_id + wave_index;
   const prog_uint8_t* wave_1 = waveform_table[wave_1_index];
   const prog_uint8_t* wave_2 = waveform_table[wave_2_index];
 

@@ -7,6 +7,7 @@
 
 #include "avrlib/base.h"
 #include "avrlib/op.h"
+#include "voicecard/fm4op.h"
 #include "voicecard/resources.h"
 
 using namespace avrlib;
@@ -160,8 +161,8 @@ class WestCoast {
       mod_phase_ += mod_increment;
       uint16_t fm_mod = 0;
       if (fm_depth > 0) {
-        uint8_t mod_val = InterpolateSample(wav_res_sine, mod_phase_);
-        fm_mod = static_cast<uint16_t>(mod_val - 128) * fm_depth;
+        uint16_t mod_val = InterpolateSine16(mod_phase_);
+        fm_mod = (static_cast<int32_t>(mod_val - 32768) * fm_depth) >> 8;
       }
 
       // Self-sync: reset phase when sync oscillator wraps.
@@ -185,8 +186,8 @@ class WestCoast {
           sample = 127 - static_cast<int16_t>(tri_phase >> 7);
         }
       } else {
-        uint8_t sine = InterpolateSample(wav_res_sine, phase_ + fm_mod);
-        sample = static_cast<int16_t>(sine) - 128;
+        uint16_t sine = InterpolateSine16(phase_ + fm_mod);
+        sample = static_cast<int16_t>(sine >> 8) - 128;
       }
 
       // Apply input gain to the raw waveform before folding.

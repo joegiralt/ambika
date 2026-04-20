@@ -26,6 +26,22 @@ using namespace avrlib;
 
 namespace ambika {
 
+// 16-bit sine table (512 entries + 1 wrap), defined in voice.cc.
+extern const prog_uint16_t wav_res_sine16[] PROGMEM;
+
+// 16-bit sine interpolation for FM — 512 entries, returns 0-65535.
+static inline uint16_t InterpolateSine16(uint16_t phase) {
+  // 9-bit index (512 entries), 7-bit fractional
+  uint16_t index = phase >> 7;
+  uint8_t frac = (phase << 1) & 0xFE;
+  uint16_t a = ResourcesManager::Lookup<uint16_t, uint16_t>(
+      wav_res_sine16, index);
+  uint16_t b = ResourcesManager::Lookup<uint16_t, uint16_t>(
+      wav_res_sine16, index + 1);
+  // Linear interpolation in 16-bit
+  return a + (static_cast<int32_t>(b - a) * frac >> 8);
+}
+
 // TX81Z waveform types derived from the sine table.
 enum FmWaveform {
   FM_WAVE_SINE,         // W1: Full sine
@@ -96,59 +112,61 @@ class Fm4Op {
     return (static_cast<int16_t>(op_out - 128) * level) >> 4;
   }
 
-  // Compute the output of a single operator waveform.
+  // Compute the output of a single operator waveform using 16-bit sine.
   static inline uint8_t RenderWaveform(uint8_t waveform, uint16_t phase) {
+    uint16_t s;
     switch (waveform) {
       case FM_WAVE_SINE:
       default:
-        return InterpolateSample(wav_res_sine, phase);
+        s = InterpolateSine16(phase);
+        break;
 
       case FM_WAVE_HALF_SINE:
-        if (phase < 0x8000) {
-          return InterpolateSample(wav_res_sine, phase << 1);
-        }
-        return 128;
+        s = (phase < 0x8000) ? InterpolateSine16(phase << 1) : 32768;
+        break;
 
       case FM_WAVE_ABS_SINE:
-        return InterpolateSample(wav_res_sine, (phase & 0x7FFF) << 1);
+        s = InterpolateSine16((phase & 0x7FFF) << 1);
+        break;
 
       case FM_WAVE_QUARTER_SINE:
-        if (phase < 0x4000) {
-          return InterpolateSample(wav_res_sine, phase << 2);
-        }
-        return 128;
+        s = (phase < 0x4000) ? InterpolateSine16(phase << 2) : 32768;
+        break;
 
       case FM_WAVE_HALF_ABS:
-        if (phase < 0x8000) {
-          return InterpolateSample(wav_res_sine, (phase & 0x3FFF) << 2);
-        }
-        return 128;
+        s = (phase < 0x8000) ? InterpolateSine16((phase & 0x3FFF) << 2) : 32768;
+        break;
 
       case FM_WAVE_TRIPLE_ABS:
         if (phase < 0x8000) {
           uint16_t tripled = static_cast<uint16_t>(phase * 3);
-          return InterpolateSample(wav_res_sine, (tripled & 0x7FFF) << 1);
+          s = InterpolateSine16((tripled & 0x7FFF) << 1);
+        } else {
+          s = 32768;
         }
-        return 128;
+        break;
 
       case FM_WAVE_PULSE_SINE: {
-        uint8_t val = InterpolateSample(wav_res_sine, (phase & 0x3FFF) << 2);
+        s = InterpolateSine16((phase & 0x3FFF) << 2);
         if (phase >= 0x8000) {
-          return 256 - val;
+          s = 65536 - s;
         }
-        return val;
+        break;
       }
 
       case FM_WAVE_SAW_SINE:
         if (phase < 0x4000) {
-          return InterpolateSample(wav_res_sine, phase << 2);
+          s = InterpolateSine16(phase << 2);
         } else if (phase < 0x8000) {
-          return 255;
+          s = 65535;
         } else if (phase < 0xC000) {
-          return InterpolateSample(wav_res_sine, phase << 2);
+          s = InterpolateSine16(phase << 2);
+        } else {
+          s = 0;
         }
-        return 0;
+        break;
     }
+    return s >> 8;  // Truncate to 8-bit at output only
   }
 
   // Render a block of FM4OP audio.
