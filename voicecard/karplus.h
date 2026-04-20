@@ -56,6 +56,7 @@ class KarplusStrong {
     write_pos_ = 0;
     delay_length_ = kKarplusBufferSize;
     excited_ = 0;
+    lp_state_ = 0;
     for (uint16_t i = 0; i < kKarplusBufferSize; ++i) {
       delay_line_[i] = 0;
     }
@@ -146,16 +147,27 @@ class KarplusStrong {
       return;
     }
 
-    // Scale damping by delay length — shorter strings (higher notes) get less
-    // damping so the decay tail stays consistent across the keyboard.
-    uint8_t coeff = 32 + (damping << 1);
-    if (coeff < 32) coeff = 32;
+    // Damping: IIR low-pass cutoff in the feedback loop.
+    // 0 = bright (high cutoff), 127 = very dark (low cutoff).
+    // The IIR filter creates dramatically different tones vs the 2-tap FIR.
+    uint8_t lp_cutoff = 255 - (damping << 1);
+    if (lp_cutoff < 2) lp_cutoff = 2;
+    // Pitch scaling: less filtering for shorter strings.
     if (delay_length_ < 64) {
-      coeff = coeff >> 2;  // Very high notes: 1/4 damping
-    } else if (delay_length_ < 128) {
-      coeff = coeff >> 1;  // High notes: 1/2 damping
+      lp_cutoff = lp_cutoff + ((255 - lp_cutoff) >> 1);  // push toward bright
+    } else if (delay_length_ < 96) {
+      lp_cutoff = lp_cutoff + ((255 - lp_cutoff) >> 2);
     }
-    uint8_t decay_amount = decay >> 1;  // 0-63 for noticeable decay control
+
+    // Decay: energy loss per delay-line cycle.
+    // 0 = infinite sustain, 127 = fast fade.
+    uint8_t decay_amount = decay >> 1;
+
+    // Stiffness offset scales with delay length.
+    uint16_t stiff_offset = (delay_length_ >> 3) + 1;
+
+    // Feedback as sustain: pushes cutoff higher (less loss = longer ring).
+    lp_cutoff = lp_cutoff + (((255 - lp_cutoff) * feedback) >> 8);
 
     // Advance ensemble LFO.
     uint16_t lfo_inc = static_cast<uint16_t>(ens_rate + 1) << 4;
@@ -171,42 +183,42 @@ class KarplusStrong {
       if (next_pos >= delay_length_) next_pos = 0;
       int16_t next = delay_line_[next_pos];
 
-      // KS low-pass averaging (16-bit).
-      int32_t filt = static_cast<int32_t>(current) * (256 - coeff) +
-                     static_cast<int32_t>(next) * coeff;
-      int16_t filtered = filt >> 8;
+      // KS core: standard 2-sample average (the string physics).
+      int16_t avg = (current >> 1) + (next >> 1);
 
-      // Stiffness.
-      if (stiffness > 0) {
-        uint16_t stiff_pos = read_pos + 7;
+      // Damping: IIR one-pole low-pass. This is what shapes the tone.
+      // High cutoff = bright (metallic), low cutoff = dark (muted thud).
+      lp_state_ += (static_cast<int32_t>(avg - lp_state_) * lp_cutoff) >> 8;
+      int16_t filtered = lp_state_;
+
+      // Stiffness: allpass-like mixing with a point further in the delay.
+      // Adds inharmonic partials (like piano string stiffness).
+      if (stiffness > 4) {
+        uint16_t stiff_pos = read_pos + stiff_offset;
         if (stiff_pos >= delay_length_) stiff_pos -= delay_length_;
         int16_t stiff_sample = delay_line_[stiff_pos];
-        filtered = (static_cast<int32_t>(filtered) * (256 - stiffness) +
-                    static_cast<int32_t>(stiff_sample) * stiffness) >> 8;
+        uint8_t sa = stiffness >> 1;  // 0-63 range for stability
+        filtered = (static_cast<int32_t>(filtered) * (256 - sa) +
+                    static_cast<int32_t>(stiff_sample) * sa) >> 8;
       }
 
-      // Decay: pull toward zero.
-      if (decay_amount) {
-        filtered -= (filtered * decay_amount) >> 8;
+      // Decay: apply energy loss once per cycle through the buffer.
+      // Use a counter that wraps at delay_length_.
+      if (decay_amount && read_pos == 0) {
+        for (uint16_t i = 0; i < delay_length_; ++i) {
+          delay_line_[i] -= (delay_line_[i] * decay_amount) >> 9;
+        }
       }
 
-      // Body resonance: mix with signal from 1/3 through the delay line.
-      // Creates a comb-filter effect that adds harmonic richness.
+      // Body resonance: comb filter at 1/3 string length.
+      // Emphasizes the 3rd harmonic and its multiples.
       if (body > 4) {
         uint16_t body_pos = read_pos + (delay_length_ / 3);
         if (body_pos >= delay_length_) body_pos -= delay_length_;
         int16_t body_sample = delay_line_[body_pos];
-        uint8_t body_amt = body << 1;  // Double the range for stronger effect.
+        uint8_t body_amt = body >> 1;  // 0-63 range for stability
         filtered = (static_cast<int32_t>(filtered) * (256 - body_amt) +
                     static_cast<int32_t>(body_sample) * body_amt) >> 8;
-      }
-
-      // Extra feedback.
-      if (feedback > 0) {
-        int32_t fb = filtered + (static_cast<int32_t>(filtered) * feedback >> 8);
-        if (fb > 16383) fb = 16383;
-        if (fb < -16384) fb = -16384;
-        filtered = fb;
       }
 
       delay_line_[read_pos] = filtered;
@@ -254,6 +266,7 @@ class KarplusStrong {
 
  private:
   int16_t delay_line_[kKarplusBufferSize];  // 16-bit for smooth decay
+  int16_t lp_state_;                        // IIR low-pass state for damping
   uint16_t write_pos_;
   uint16_t delay_length_;
   uint8_t excited_;
