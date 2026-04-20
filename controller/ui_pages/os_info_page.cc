@@ -133,7 +133,7 @@ void OsInfoPage::UpdateScreen() {
   display.line_buffer(0)[0] = ' ';
   char* buffer = display.line_buffer(0) + 1;
   memcpy_P(&buffer[0], PSTR("carcosa"), 7);
-  memcpy_P(&buffer[8], PSTR("v2.04"), 5);
+  memcpy_P(&buffer[8], PSTR("v2.05"), 5);
 
   memcpy_P(&buffer[15], PSTR("port 1 device ?"), 15);
   Word version_number = voicecard_tx.GetVersion(active_control_);
