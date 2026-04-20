@@ -362,9 +362,9 @@ static const prog_char midi_cc_map[128] PROGMEM = {
     28,  25, 255,  26, 255, 255,  44,  45,
    // 96-111
    255, 255, 255, 255, 255, 255,  49,  50,
-    51,  52,  53,  57,  75,  74,  73, 255,
+    51,  52,  53,  57,  75,  74,  73,  76,
    // 112-127
-   255, 255, 255, 255, 255, 255, 255, 255,
+    77,  78,  79, 255, 255, 255, 255, 255,
    255, 255, 255, 255, 255, 255, 255, 255
 };
 
@@ -955,6 +955,34 @@ static const prog_Parameter parameters[kNumParameters] PROGMEM = {
     UNIT_RAW_UINT8, 0, 127,
     1, 0, 0xff, 0xff,
     STR_RES_AMOUNT, STR_RES_AMOUNT, STR_RES_MIXER },
+
+  // 76 - extra envelope 4 attack
+  { PARAMETER_LEVEL_PATCH,
+    PRM_PATCH_EXTRA_ENV_ATTACK,
+    UNIT_RAW_UINT8, 0, 127,
+    4, 4, 0xff, 0xff,
+    STR_RES_ATTK, STR_RES_ATTACK, STR_RES_ENVELOPE },
+
+  // 77 - extra envelope 4 decay
+  { PARAMETER_LEVEL_PATCH,
+    PRM_PATCH_EXTRA_ENV_DECAY,
+    UNIT_RAW_UINT8, 0, 127,
+    4, 4, 0xff, 0xff,
+    STR_RES_DECAY, STR_RES_DECAY, STR_RES_ENVELOPE },
+
+  // 78 - extra envelope 4 sustain
+  { PARAMETER_LEVEL_PATCH,
+    PRM_PATCH_EXTRA_ENV_SUSTAIN,
+    UNIT_RAW_UINT8, 0, 127,
+    4, 4, 0xff, 0xff,
+    STR_RES_SUSTAIN, STR_RES_SUSTAIN, STR_RES_ENVELOPE },
+
+  // 79 - extra envelope 4 release
+  { PARAMETER_LEVEL_PATCH,
+    PRM_PATCH_EXTRA_ENV_RELEASE,
+    UNIT_RAW_UINT8, 0, 127,
+    4, 4, 0xff, 0xff,
+    STR_RES_RELEASE, STR_RES_RELEASE, STR_RES_ENVELOPE },
 };
 
 /* static */
