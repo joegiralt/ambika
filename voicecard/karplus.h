@@ -232,8 +232,8 @@ class KarplusStrong {
             ? static_cast<int8_t>(255 - lfo_8)
             : static_cast<int8_t>(lfo_8);
 
-        int16_t offset2 = (static_cast<int16_t>(lfo_val) * ens_depth) >> 8;
-        int16_t offset3 = -offset2 + (ens_spread >> 2);
+        int16_t offset2 = (static_cast<int16_t>(lfo_val) * ens_depth) >> 7;
+        int16_t offset3 = -offset2 + (ens_spread >> 1);
 
         int16_t p2 = (static_cast<int16_t>(read_pos) + offset2) %
             static_cast<int16_t>(delay_length_);
