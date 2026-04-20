@@ -312,6 +312,8 @@ void Storage::TouchObject(const StorageLocation& location) {
     case STORAGE_OBJECT_PATCH:
       multi.mutable_part(location.part)->AllSoundOff();
       multi.mutable_part(location.part)->TouchPatch();
+      ConstantDelay(5);
+      multi.mutable_part(location.part)->TouchPatch();
       break;
 
     case STORAGE_OBJECT_PART:
