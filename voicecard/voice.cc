@@ -45,7 +45,7 @@ Part Voice::part_;
 uint8_t *Voice::part_data_ = reinterpret_cast<uint8_t*> (&Voice::part_);
 
 Lfo Voice::voice_lfo_;
-Envelope Voice::envelope_[kNumEnvelopes];
+Envelope Voice::envelope_[kNumTotalEnvelopes];
 uint8_t Voice::gate_;
 int16_t Voice::pitch_increment_;
 int16_t Voice::pitch_target_;
@@ -90,8 +90,8 @@ static const prog_Patch init_patch PROGMEM = {
   MOD_SRC_LFO_1, MOD_DST_PARAMETER_2, 0,
   MOD_SRC_LFO_2, MOD_DST_MIX_BALANCE, 0,
   MOD_SRC_LFO_4, MOD_DST_PARAMETER_1, 63,
-  MOD_SRC_SEQ_1, MOD_DST_PARAMETER_1, 0,
-  MOD_SRC_SEQ_2, MOD_DST_PARAMETER_2, 0,
+  MOD_SRC_ENV_4, MOD_DST_PARAMETER_1, 0,
+  MOD_SRC_ENV_5, MOD_DST_PARAMETER_2, 0,
   MOD_SRC_ENV_2, MOD_DST_VCA, 32,
   MOD_SRC_VELOCITY, MOD_DST_VCA, 0,
   MOD_SRC_PITCH_BEND, MOD_DST_OSC_1_2_COARSE, 0,
@@ -105,12 +105,18 @@ static const prog_Patch init_patch PROGMEM = {
   
   // Padding
   0, 0, 0, 0, 0, 0, 0, 0,
+
+  // Extra envelopes (env4-7 ADSR)
+  0, 40, 20, 60,
+  0, 40, 20, 60,
+  0, 40, 20, 60,
+  0, 40, 20, 60,
 };
 
 /* static */
 void Voice::Init() {
   pitch_value_ = 0;
-  for (uint8_t i = 0; i < kNumEnvelopes; ++i) {
+  for (uint8_t i = 0; i < kNumTotalEnvelopes; ++i) {
     envelope_[i].Init();
   }
   memset(no_sync_, 0, kAudioBlockSize);
@@ -140,7 +146,7 @@ void Voice::ResetAllControllers() {
 
 /* static */
 void Voice::TriggerEnvelope(uint8_t stage) {
-  for (uint8_t i = 0; i < kNumEnvelopes; ++i) {
+  for (uint8_t i = 0; i < kNumTotalEnvelopes; ++i) {
     TriggerEnvelope(i, stage);
   }
 }
@@ -207,9 +213,9 @@ inline void Voice::LoadSources() {
   // Rescale the value of each modulation sources. Envelopes are in the
   // 0-16383 range ; just like pitch. All are scaled to 0-255.
   modulation_sources_[MOD_SRC_NOISE] = Random::GetByte();
-  modulation_sources_[MOD_SRC_ENV_1] = envelope_[0].Render();
-  modulation_sources_[MOD_SRC_ENV_2] = envelope_[1].Render();
-  modulation_sources_[MOD_SRC_ENV_3] = envelope_[2].Render();
+  for (uint8_t i = 0; i < kNumTotalEnvelopes; ++i) {
+    modulation_sources_[MOD_SRC_ENV_1 + i] = envelope_[i].Render();
+  }
   modulation_sources_[MOD_SRC_NOTE] = U14ShiftRight6(pitch_value_);
   modulation_sources_[MOD_SRC_GATE] = gate_;
   modulation_sources_[MOD_SRC_LFO_4] = voice_lfo_.Render(
@@ -358,7 +364,7 @@ inline void Voice::UpdateDestinations() {
         slop) >> 8;
   }
 
-  for (int i = 0; i < kNumEnvelopes; ++i) {
+  for (int i = 0; i < kNumEnvLfoSlots; ++i) {
     int16_t new_attack = patch_.env_lfo[i].attack;
     new_attack = Clip(new_attack + attack_mod + env_slop, 0, 127);
     int16_t new_decay = patch_.env_lfo[i].decay;
@@ -371,6 +377,13 @@ inline void Voice::UpdateDestinations() {
           patch_.env_lfo[i].sustain,
           new_release,
           patch_.env_lfo[i].envelope_curve);
+  }
+  for (int i = 0; i < kNumExtraEnvelopes; ++i) {
+    envelope_[kNumEnvLfoSlots + i].Update(
+        patch_.extra_env[i].attack,
+        patch_.extra_env[i].decay,
+        patch_.extra_env[i].sustain,
+        patch_.extra_env[i].release);
   }
   
   voice_lfo_.set_phase_increment(

@@ -130,7 +130,7 @@ class Voice {
   static Part part_;
   
   // Envelope generators.
-  static Envelope envelope_[kNumEnvelopes];
+  static Envelope envelope_[kNumTotalEnvelopes];
   static uint8_t gate_;
   static Lfo voice_lfo_;
   static uint8_t modulation_sources_[kNumModulationSources];

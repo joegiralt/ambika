@@ -117,6 +117,10 @@ class VoicecardProtocolRx {
       case COMMAND_RETRIGGER_ENVELOPE:
       case COMMAND_RETRIGGER_ENVELOPE + 1:
       case COMMAND_RETRIGGER_ENVELOPE + 2:
+      case COMMAND_RETRIGGER_ENVELOPE + 3:
+      case COMMAND_RETRIGGER_ENVELOPE + 4:
+      case COMMAND_RETRIGGER_ENVELOPE + 5:
+      case COMMAND_RETRIGGER_ENVELOPE + 6:
         voice.TriggerEnvelope(command_ & 0x0f, ATTACK);
         break;
       case COMMAND_RESET_ALL_CONTROLLERS:
