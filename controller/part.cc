@@ -62,8 +62,8 @@ static const prog_Patch init_patch PROGMEM = {
   MOD_SRC_LFO_2, MOD_DST_PARAMETER_2, 0,
   MOD_SRC_LFO_3, MOD_DST_MIX_BALANCE, 0,
   MOD_SRC_LFO_4, MOD_DST_FILTER_CUTOFF, 0,
-  MOD_SRC_SEQ_1, MOD_DST_FILTER_CUTOFF, 0,
-  MOD_SRC_SEQ_2, MOD_DST_MIX_BALANCE, 0,
+  MOD_SRC_ENV_4, MOD_DST_FILTER_CUTOFF, 0,
+  MOD_SRC_ENV_5, MOD_DST_MIX_BALANCE, 0,
 
   MOD_SRC_ENV_3, MOD_DST_VCA, 63,
   MOD_SRC_VELOCITY, MOD_DST_VCA, 16,
@@ -73,11 +73,17 @@ static const prog_Patch init_patch PROGMEM = {
   // Modifiers
   MOD_SRC_LFO_1, MOD_SRC_LFO_2, 0,
   MOD_SRC_LFO_2, MOD_SRC_LFO_3, 0,
-  MOD_SRC_LFO_3, MOD_SRC_SEQ_1, 0,
-  MOD_SRC_SEQ_1, MOD_SRC_SEQ_2, 0,
+  MOD_SRC_LFO_3, MOD_SRC_ENV_4, 0,
+  MOD_SRC_ENV_4, MOD_SRC_ENV_5, 0,
   
   // Padding
   0, 0, 0, 0, 0, 0, 0, 0,
+
+  // Extra envelopes (env4-7 ADSR: attack, decay, sustain, release)
+  0, 40, 20, 60,
+  0, 40, 20, 60,
+  0, 40, 20, 60,
+  0, 40, 20, 60,
 };
 
 static const prog_PartData init_part PROGMEM = {
