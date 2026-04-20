@@ -165,6 +165,10 @@ uint8_t Library::OnKeyBrowse(uint8_t key) {
             location_.object = STORAGE_OBJECT_PATCH;
           } else {
             location_.object = static_cast<StorageObject>(location_.object + 1);
+            // Skip PART (not independently browseable).
+            if (location_.object == STORAGE_OBJECT_PART) {
+              location_.object = STORAGE_OBJECT_PROGRAM;
+            }
           }
           location_.bank = loaded_objects_indices_[location_.index()] >> 8;
           location_.slot = loaded_objects_indices_[location_.index()] & 0xff;
@@ -380,10 +384,6 @@ void Library::OnDialogClosed(uint8_t dialog_id, uint8_t return_value) {
           switch (location_.object) {
             case STORAGE_OBJECT_PATCH:
               multi.mutable_part(location_.part)->InitPatch(mode);
-              break;
-
-            case STORAGE_OBJECT_SEQUENCE:
-              multi.mutable_part(location_.part)->InitSequence(mode);
               break;
 
             case STORAGE_OBJECT_PROGRAM:

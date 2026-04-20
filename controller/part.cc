@@ -79,63 +79,31 @@ static const prog_Patch init_patch PROGMEM = {
   // Padding
   0, 0, 0, 0, 0, 0, 0, 0,
 
-  // Extra envelopes (env4-7 ADSR: attack, decay, sustain, release)
-  0, 40, 20, 60,
-  0, 40, 20, 60,
-  0, 40, 20, 60,
-  0, 40, 20, 60,
+  // Extra envelope-LFO settings (env4-7: ADSR + LFO shape/rate/curve/retrigger)
+  0, 40, 20, 60, LFO_WAVEFORM_TRIANGLE, 0, 0, 0,
+  0, 40, 20, 60, LFO_WAVEFORM_TRIANGLE, 0, 0, 0,
+  0, 40, 20, 60, LFO_WAVEFORM_TRIANGLE, 0, 0, 0,
+  0, 40, 20, 60, LFO_WAVEFORM_TRIANGLE, 0, 0, 0,
 };
 
 static const prog_PartData init_part PROGMEM = {
   // Volume
   120,
-  
+
   // Octave and tuning
   0, 0, 0, 0,
-  
+
   // Legato, portamento, seq mode
   0, 0, 0,
-  
+
   // Arp data
   0, 1, 0, 10,
-  
-  // Sequence length
-  16,
-  16,
-  16,
-  POLY,
-  
-  // Step sequence 1
-  0xff, 0xff, 0x80, 0x80, 0xcc, 0xcc, 0x20, 0x20,
-  0x00, 0x20, 0x40, 0x60, 0x80, 0xa0, 0xc0, 0xff,
 
-  // Step sequence 1
-  0x00, 0x10, 0x20, 0x40, 0x80, 0xff, 0x80, 0x40,
-  0x20, 0x20, 0x20, 0x20, 0x00, 0x00, 0x80, 0x40,
-  
-  // Note sequence
-  60 | 0x80, 100,
-  60, 100,
-  48 | 0x80, 100,
-  48, 100,
-  60 | 0x80, 100,
-  60, 100,
-  48 | 0x80, 100,
-  48, 100,
-  60 | 0x80, 100,
-  60, 100,
-  48 | 0x80, 100,
-  48 | 0x80, 100 | 0x80,
-  60 | 0x80, 100,
-  60, 100,
-  48 | 0x80, 100,
-  48, 100,
-  
+  // Polyphony mode
+  POLY,
+
   // Padding
-  0,
-  0,
-  0,
-  0,
+  0, 0, 0, 0, 0, 0, 0,
 };
 
 void Part::Touch() {
@@ -205,17 +173,6 @@ void Part::InitSettings(InitializationMode mode) {
     RandomizeRange(PRM_PART_VOLUME, sizeof(PartData));
   }
   Touch();
-}
-
-void Part::InitSequence(InitializationMode mode) {
-  if (mode == INITIALIZATION_DEFAULT) {
-    memcpy_P(
-        mutable_raw_sequence_data(),
-        (prog_char*)(&init_part) + 8,
-        72);
-  } else {
-    RandomizeRange(PRM_PART_VOLUME + 8, 72);
-  }
 }
 
 void Part::RandomizeRange(uint8_t start, uint8_t size) {

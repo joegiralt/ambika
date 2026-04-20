@@ -56,13 +56,6 @@ struct EnvelopeLfoSettings {
   uint8_t retrigger_mode;
 };
 
-struct ExtraEnvelopeSettings {
-  uint8_t attack;
-  uint8_t decay;
-  uint8_t sustain;
-  uint8_t release;
-};
-
 struct Modulation {
   uint8_t source;
   uint8_t destination;
@@ -284,8 +277,8 @@ struct Patch {
   // Offset: 104-112
   uint8_t padding[8];
 
-  // Offset: 112-128
-  ExtraEnvelopeSettings extra_env[kNumExtraEnvelopes];
+  // Offset: 112-144
+  EnvelopeLfoSettings extra_env_lfo[kNumExtraEnvelopes];
 };
 
 typedef Patch PROGMEM prog_Patch;

@@ -69,15 +69,6 @@ enum PartFlags {
   FLAG_HAS_USER_CHANGE = 2,
 };
 
-static const uint8_t kNumSequences = 3;
-
-struct NoteStep {
-  uint8_t note;
-  uint8_t velocity;
-  uint8_t legato;
-  uint8_t gate;
-};
-
 struct PartData {
   // Offset: 0
   uint8_t volume;
@@ -99,76 +90,11 @@ struct PartData {
   uint8_t arp_pattern;
   uint8_t arp_divider;
 
-  // Offset: 12..16
-  uint8_t sequence_length[kNumSequences];
+  // Offset: 12
   uint8_t polyphony_mode;
 
-  // Offset: 16-80
-  //  0..15: step sequence 1
-  // 16..31: step sequence 2
-  // 32..63: (note value | 0x80 if gate), (note velocity | 0x80 if legato)
-  uint8_t sequence_data[64];
-  
-  // Offset: 80-84
-  uint8_t padding[4];
-  
-  uint8_t step_value(uint8_t sequence, uint8_t step) const {
-    return sequence_data[(step + (sequence << 4)) & 0x1f];
-  }
-  
-  void set_step_value(uint8_t sequence, uint8_t step, uint8_t value) {
-    sequence_data[(step + (sequence << 4)) & 0x1f] = value;
-  }
-  
-  uint8_t note(uint8_t step) const {
-    uint8_t offset = (32 + (step << 1)) & 0x3f;
-    return sequence_data[offset] & 0x7f;
-  }
-  
-  void set_note(uint8_t step, uint8_t note) {
-    uint8_t offset = (32 + (step << 1)) & 0x3f;
-    sequence_data[offset] &= 0x80;
-    sequence_data[offset] |= note;
-  }
-  
-  uint16_t ordered_gate_velocity(uint8_t step) const {
-    uint8_t offset = (32 + (step << 1)) & 0x3f;
-    if (!(sequence_data[offset] & 0x80)) {
-      return 0;
-    } else {
-      uint8_t o = sequence_data[offset + 1] + 128;
-      return static_cast<uint16_t>(o) + 1;
-    }
-  }
-  
-  void set_ordered_gate_velocity(uint8_t step, uint16_t value) {
-    uint8_t offset = (32 + (step << 1)) & 0x3f;
-    if (!value) {
-      sequence_data[offset] &= 0x7f;
-      sequence_data[offset + 1] = 0;
-    } else {
-      sequence_data[offset] |= 0x80;
-      sequence_data[offset + 1] = (value - 1) + 128;
-    }
-  }
-  
-  void set_velocity(uint8_t step, uint8_t velocity) {
-    uint8_t offset = (32 + (step << 1)) & 0x3f;
-    sequence_data[offset + 1] &= 0x80;
-    sequence_data[offset + 1] |= velocity;
-  }
-  
-  NoteStep note_step(uint8_t step) const {
-    NoteStep n;
-    uint8_t offset = (32 + (step << 1)) & 0x3f;
-    n.note = sequence_data[offset];
-    n.velocity = sequence_data[offset + 1];
-    n.gate = n.note & 0x80;
-    n.legato = n.velocity & 0x80;
-    n.note &= 0x7f;
-    n.velocity &= 0x7f;
-    return n;
-  }
+  // Offset: 13-19
+  uint8_t padding[7];
 };
 
 typedef PartData PROGMEM prog_PartData;
@@ -186,9 +112,6 @@ enum PartParameter {
   PRM_PART_ARP_OCTAVE,
   PRM_PART_ARP_PATTERN,
   PRM_PART_ARP_RESOLUTION,
-  PRM_PART_SEQUENCE_LENGTH_1,
-  PRM_PART_SEQUENCE_LENGTH_2,
-  PRM_PART_SEQUENCE_LENGTH_3,
   PRM_PART_POLYPHONY_MODE
 };
 
@@ -199,7 +122,6 @@ class Part {
 
   void InitPatch(InitializationMode mode);
   void InitSettings(InitializationMode mode);
-  void InitSequence(InitializationMode mode);
   
   void NoteOn(uint8_t note, uint8_t velocity);
   void NoteOff(uint8_t note);
@@ -230,19 +152,13 @@ class Part {
   PartData* mutable_data() { return &data_; }
   const PartData& data() const { return data_; }
   
-  const uint8_t* raw_sequence_data() const { 
-    return static_cast<const uint8_t*>(static_cast<const void*>(&data_)) + 8;
-  }
-  const uint8_t* raw_data() const { 
+  const uint8_t* raw_data() const {
     return static_cast<const uint8_t*>(static_cast<const void*>(&data_));
   }
   const uint8_t* raw_patch_data() const { 
     return static_cast<const uint8_t*>(static_cast<const void*>(&patch_));
   }
   
-  uint8_t* mutable_raw_sequence_data() {
-    return static_cast<uint8_t*>(static_cast<void*>(&data_)) + 8;
-  }
   uint8_t* mutable_raw_data() {
     return static_cast<uint8_t*>(static_cast<void*>(&data_));
   }

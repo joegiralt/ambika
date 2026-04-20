@@ -79,7 +79,7 @@ uint8_t EnvPage::AdsrOffset(uint8_t knob) {
   if (selector_ < 3) {
     return 24 + selector_ * 8 + knob;
   } else {
-    return 112 + (selector_ - 3) * 4 + knob;
+    return 112 + (selector_ - 3) * 8 + knob;
   }
 }
 
@@ -111,8 +111,20 @@ uint8_t EnvPage::OnIncrement(int8_t increment) {
       patch[offset] = val;
       multi.mutable_part(ui.state().active_part)->WriteToAllVoices(
           VOICECARD_DATA_PATCH, offset, patch[offset]);
+    } else if (ctrl == 3) {
+      // Curve knob — works for all 7 envelopes.
+      uint8_t base = selector_ < 3
+          ? (24 + selector_ * 8)
+          : (112 + (selector_ - 3) * 8);
+      uint8_t offset = base + 6;
+      int16_t val = patch[offset] + increment;
+      if (val < 0) val = 0;
+      if (val >= ENVELOPE_CURVE_LAST) val = ENVELOPE_CURVE_LAST - 1;
+      patch[offset] = val;
+      multi.mutable_part(ui.state().active_part)->WriteToAllVoices(
+          VOICECARD_DATA_PATCH, offset, patch[offset]);
     } else if (selector_ < 3) {
-      // LFO controls (ctrl 1-3) only for env 1-3.
+      // LFO controls (ctrl 1-2) only for env 1-3.
       uint8_t base = 24 + selector_ * 8;
       if (ctrl == 1) {
         // Rate (offset +5), 0-127.
@@ -132,26 +144,17 @@ uint8_t EnvPage::OnIncrement(int8_t increment) {
         patch[offset] = val;
         multi.mutable_part(ui.state().active_part)->WriteToAllVoices(
             VOICECARD_DATA_PATCH, offset, patch[offset]);
-      } else {
-        // Curve (offset +6), 0 to ENVELOPE_CURVE_LAST-1.
-        uint8_t offset = base + 6;
-        int16_t val = patch[offset] + increment;
-        if (val < 0) val = 0;
-        if (val >= ENVELOPE_CURVE_LAST) val = ENVELOPE_CURVE_LAST - 1;
-        patch[offset] = val;
-        multi.mutable_part(ui.state().active_part)->WriteToAllVoices(
-            VOICECARD_DATA_PATCH, offset, patch[offset]);
       }
     }
-    // else: ctrl 1-3 and selector >= 3 — ignore (no LFO for extra envs).
+    // ctrl 1-2 and selector >= 3: ignore (no LFO for extra envs).
     edit_mode_ = EDIT_STARTED_BY_ENCODER;
   } else {
     // Navigate controls.
     int8_t new_control = active_control_ + increment;
     if (new_control >= 0 && new_control < 8) {
-      // Skip LFO knobs (1-3) when selector >= 3.
-      if (selector_ >= 3 && new_control >= 1 && new_control <= 3) {
-        new_control = (increment > 0) ? 4 : 0;
+      // Skip LFO knobs (1-2) when selector >= 3 (curve knob 3 is valid).
+      if (selector_ >= 3 && new_control >= 1 && new_control <= 2) {
+        new_control = (increment > 0) ? 3 : 0;
       }
       if (new_control >= 0 && new_control < 8) {
         active_control_ = new_control;
@@ -196,7 +199,23 @@ uint8_t EnvPage::OnPot(uint8_t index, uint8_t value) {
     return 1;
   }
 
-  // Knobs 1-3: LFO rate, shape, curve — only for selector 0-2.
+  // Knob 3 (curve) works for all envelopes.
+  if (index == 3) {
+    uint8_t base = selector_ < 3
+        ? (24 + selector_ * 8)
+        : (112 + (selector_ - 3) * 8);
+    uint8_t offset = base + 6;
+    uint8_t val = (static_cast<uint16_t>(value) * ENVELOPE_CURVE_LAST) >> 7;
+    if (val >= ENVELOPE_CURVE_LAST) val = ENVELOPE_CURVE_LAST - 1;
+    patch[offset] = val;
+    multi.mutable_part(ui.state().active_part)->WriteToAllVoices(
+        VOICECARD_DATA_PATCH, offset, patch[offset]);
+    active_control_ = index;
+    edit_mode_ = EDIT_STARTED_BY_POT;
+    return 1;
+  }
+
+  // Knobs 1-2: LFO rate, shape — only for selector 0-2.
   if (selector_ >= 3) return 1;
 
   uint8_t base = 24 + selector_ * 8;
@@ -211,14 +230,6 @@ uint8_t EnvPage::OnPot(uint8_t index, uint8_t value) {
     uint8_t offset = base + 4;
     uint8_t val = (static_cast<uint16_t>(value) * LFO_WAVEFORM_LAST) >> 7;
     if (val >= LFO_WAVEFORM_LAST) val = LFO_WAVEFORM_LAST - 1;
-    patch[offset] = val;
-    multi.mutable_part(ui.state().active_part)->WriteToAllVoices(
-        VOICECARD_DATA_PATCH, offset, patch[offset]);
-  } else {
-    // Curve.
-    uint8_t offset = base + 6;
-    uint8_t val = (static_cast<uint16_t>(value) * ENVELOPE_CURVE_LAST) >> 7;
-    if (val >= ENVELOPE_CURVE_LAST) val = ENVELOPE_CURVE_LAST - 1;
     patch[offset] = val;
     multi.mutable_part(ui.state().active_part)->WriteToAllVoices(
         VOICECARD_DATA_PATCH, offset, patch[offset]);
@@ -304,8 +315,27 @@ void EnvPage::UpdateScreen() {
         }
       }
     } else {
-      // Blank cell for knobs 1-3 when selector >= 3.
-      for (uint8_t j = 1; j < 10; ++j) buffer[j] = ' ';
+      // Selector >= 3: knobs 1-2 blank, knob 3 shows curve.
+      if (i == 3) {
+        // Curve knob for extra envelopes.
+        memcpy_P(&buffer[1], env_top_labels_lfo + 3 * 4, 4);  // "curv"
+        if (i == active_control_ && buffer[1] >= 'a' && buffer[1] <= 'z') {
+          buffer[1] -= 0x20;
+        }
+        buffer[5] = ' ';
+        uint8_t base = 112 + (selector_ - 3) * 8;
+        uint8_t curve = patch[base + 6];
+        if (curve < ENVELOPE_CURVE_LAST) {
+          memcpy_P(&buffer[6], env_curve_names + curve * 4, 4);
+        } else {
+          buffer[6] = ' ';
+          buffer[7] = ' ';
+          buffer[8] = ' ';
+          buffer[9] = '?';
+        }
+      } else {
+        for (uint8_t j = 1; j < 10; ++j) buffer[j] = ' ';
+      }
     }
   }
 }

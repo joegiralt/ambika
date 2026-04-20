@@ -106,11 +106,11 @@ static const prog_Patch init_patch PROGMEM = {
   // Padding
   0, 0, 0, 0, 0, 0, 0, 0,
 
-  // Extra envelopes (env4-7 ADSR)
-  0, 40, 20, 60,
-  0, 40, 20, 60,
-  0, 40, 20, 60,
-  0, 40, 20, 60,
+  // Extra envelope-LFO settings (env4-7: ADSR + LFO shape/rate/curve/retrigger)
+  0, 40, 20, 60, LFO_WAVEFORM_TRIANGLE, 0, 0, 0,
+  0, 40, 20, 60, LFO_WAVEFORM_TRIANGLE, 0, 0, 0,
+  0, 40, 20, 60, LFO_WAVEFORM_TRIANGLE, 0, 0, 0,
+  0, 40, 20, 60, LFO_WAVEFORM_TRIANGLE, 0, 0, 0,
 };
 
 /* static */
@@ -380,10 +380,11 @@ inline void Voice::UpdateDestinations() {
   }
   for (int i = 0; i < kNumExtraEnvelopes; ++i) {
     envelope_[kNumEnvLfoSlots + i].Update(
-        patch_.extra_env[i].attack,
-        patch_.extra_env[i].decay,
-        patch_.extra_env[i].sustain,
-        patch_.extra_env[i].release);
+        patch_.extra_env_lfo[i].attack,
+        patch_.extra_env_lfo[i].decay,
+        patch_.extra_env_lfo[i].sustain,
+        patch_.extra_env_lfo[i].release,
+        patch_.extra_env_lfo[i].envelope_curve);
   }
   
   voice_lfo_.set_phase_increment(
