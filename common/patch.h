@@ -37,6 +37,14 @@ struct FilterSettings {
   uint8_t mode;
 };
 
+enum SynthEngine {
+  ENGINE_CLASSIC,
+  ENGINE_FM4OP,
+  ENGINE_KS_PLUCK,
+  ENGINE_WESTCOAST,
+  ENGINE_LAST
+};
+
 enum EnvelopeCurve {
   ENVELOPE_CURVE_EXPONENTIAL,
   ENVELOPE_CURVE_LINEAR,

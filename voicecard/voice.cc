@@ -255,7 +255,7 @@ void Voice::Trigger(uint16_t note, uint8_t velocity, uint8_t legato) {
     gate_ = 255;
     TriggerEnvelope(ATTACK);
     transient_generator.Trigger();
-    if (patch_.osc[0].shape == WAVEFORM_KS_PLUCK) {
+    if (patch_.padding[2] == ENGINE_KS_PLUCK) {
       karplus_.Trigger(
           patch_.osc[1].shape,      // excitation type
           patch_.osc[1].parameter,  // excitation color
@@ -490,7 +490,7 @@ inline void Voice::RenderOscillators() {
   base_pitch += (dst_[MOD_DST_OSC_1_2_FINE] - 8192) >> 7;
 
   // --- 4-op FM mode ---
-  if (patch_.osc[0].shape == WAVEFORM_FM4OP) {
+  if (patch_.padding[2] == ENGINE_FM4OP) {
     uint16_t base_increment = ComputePhaseIncrement(base_pitch);
 
     // Set up operator phase increments from patch fields.
@@ -549,7 +549,7 @@ inline void Voice::RenderOscillators() {
   }
 
   // --- Karplus-Strong mode ---
-  if (patch_.osc[0].shape == WAVEFORM_KS_PLUCK) {
+  if (patch_.padding[2] == ENGINE_KS_PLUCK) {
     int16_t ks_pitch = base_pitch + S8U8Mul(patch_.osc[0].range, 128)
         + patch_.osc[0].detune;
     uint16_t ks_increment = ComputePhaseIncrement(ks_pitch);
@@ -576,7 +576,7 @@ inline void Voice::RenderOscillators() {
   }
 
   // --- West Coast mode ---
-  if (patch_.osc[0].shape == WAVEFORM_WESTCOAST) {
+  if (patch_.padding[2] == ENGINE_WESTCOAST) {
     int16_t wc_pitch = base_pitch + S8U8Mul(patch_.osc[0].range, 128)
         + patch_.osc[0].detune;
     uint16_t wc_increment = ComputePhaseIncrement(wc_pitch);
@@ -680,10 +680,10 @@ void Voice::ProcessBlock() {
 
   RenderOscillators();
 
-  uint8_t is_fm4op = (patch_.osc[0].shape == WAVEFORM_FM4OP);
+  uint8_t is_fm4op = (patch_.padding[2] == ENGINE_FM4OP);
   uint8_t is_special = is_fm4op ||
-      (patch_.osc[0].shape == WAVEFORM_KS_PLUCK) ||
-      (patch_.osc[0].shape == WAVEFORM_WESTCOAST);
+      (patch_.padding[2] == ENGINE_KS_PLUCK) ||
+      (patch_.padding[2] == ENGINE_WESTCOAST);
 
   // In FM4OP mode, skip oscillator mixing and sub-osc (those patch fields
   // are reinterpreted as FM parameters).
