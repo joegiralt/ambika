@@ -42,7 +42,7 @@ static const prog_Patch init_patch PROGMEM = {
   0, 0, 4, 0,                // osc1: wav1|wav2=0(sine), wav3|wav4=0, range=R_100, det=0
 
   // Mixer (FM mode: ratios, levels)
-  4, 0, 4, 0, 127, 120, 115, 112,
+  4, 0, 4, 0, 20, 10, 10, 1,
 
   // Filter
   96, 0, 0, 0, 0, 0, 24, 0,
@@ -91,7 +91,7 @@ static const prog_PartData init_part PROGMEM = {
   120,
 
   // Octave and tuning
-  0, 0, 0, 0,
+  -1, 0, 0, 0,
 
   // Legato, portamento, seq mode
   0, 0, 0,

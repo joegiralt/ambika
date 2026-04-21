@@ -113,6 +113,7 @@ void Init() {
     system_settings.Init(true);
   }
   multi.Init(ui.shifted());
+  ui.ShowPreviousPage();
 
   storage.Init();
 }

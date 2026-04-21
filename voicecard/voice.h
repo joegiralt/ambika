@@ -74,11 +74,9 @@ class Voice {
   // Move this voice to the release stage.
   static void Kill() { TriggerEnvelope(DEAD); }
 
-  // Reset all synthesis engine state (called after bulk patch load).
+  // Force engine re-init on next render (called after bulk patch load).
+  // The actual Init() runs in RenderOscillators for the active engine only.
   static void ResetEngines() {
-    fm4op_.Init();
-    karplus_.Init();
-    westcoast_.Init();
     last_engine_ = 0xFF;
   }
 
