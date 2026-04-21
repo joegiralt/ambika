@@ -1,4 +1,4 @@
-# Carcosa v2.05
+# Carcosa v2.06
 ## Custom firmware for the Ambika polysynth
 
 Carcosa replaces the stock Ambika firmware with a focused set of synthesis engines, expanded envelope capabilities, and a streamlined interface.
@@ -76,11 +76,11 @@ TX81Z-style frequency modulation with 4 operators.
 
 **Operator waveforms:** sin, half, abs, qtr, habs, tri, pls, saw
 
-**Modulation depth:** Operator levels use a TX81Z-style exponential curve (0.75 dB/step). Level 0 = silence, 64 = barely audible, 100 = moderate, 127 = full. The useful modulation range is 90-127. Per-operator envelopes (env 4-7) multiply the level after the exponential curve, matching the TX81Z signal chain.
+**Modulation depth:** Operator levels use a TX81Z-style exponential curve (0.75 dB/step). Level 0 = silence, 64 = barely audible, 100 = moderate, 127 = full. The curve is steep above ~90 — start with low values (10-30) and bring up gradually. Per-operator envelopes (env 4-7) multiply the level after the exponential curve, matching the TX81Z signal chain.
 
 **Feedback:** 16-bit internal state creates evolving, non-repeating oscillation (similar to the TX81Z's 14-bit feedback dynamics). Higher values add saw-like harmonics to operator 4.
 
-The mod matrix destination `prm1` controls total FM depth and can be modulated by envelopes/LFOs for dynamic timbral control.
+The mod matrix shows FM-specific destination names when in FM mode: `algo`, `lvl1`-`lvl4`, `rat3`, `fin3`, etc. Route envelopes/LFOs to operator levels for dynamic FM timbres.
 
 #### Karplus-Strong (pluck)
 
@@ -110,7 +110,7 @@ Physical model of a plucked string. A noise burst excites a tuned delay line wit
 | 5 | stif | 0-127 | String stiffness (inharmonic partials, scales with pitch) |
 | 6 | feed | 0-127 | Sustain (reduces damping loss for longer ring, never self-oscillates) |
 
-**Damping** uses an IIR low-pass filter that sweeps from bright metallic ring (0) to dark muted thud (127). The `prm1` mod destination controls damping and can be modulated for expressive playing.
+**Damping** uses an IIR low-pass filter that sweeps from bright metallic ring (0) to dark muted thud (127). The mod matrix shows KS-specific destination names: `damp`, `body`, `stif`, `emix`, `feed`, etc.
 
 #### West Coast (wcoast)
 
@@ -141,7 +141,7 @@ Buchla-style wavefolder with built-in FM and sub-oscillator.
 
 **Wavefolder** uses a quadratic gain curve (1x at fold=0, 33x at fold=127) creating up to 16 folds — matching real Buchla 259 harmonic density. The **color** filter is a 2-pole IIR (12dB/oct) that sweeps from dark fundamental-only to bright full harmonics.
 
-Route an envelope to `prm1` (fold depth) for the classic west coast behavior where timbre and amplitude are linked. The `env` parameter on page 2 does this directly — the signature Buchla pluck sound.
+Route an envelope to `fold` (fold depth) for the classic west coast behavior where timbre and amplitude are linked. The `env` parameter on page 2 does this directly — the signature Buchla pluck sound. The mod matrix shows WC-specific destination names: `fold`, `sym`, `bias`, `colr`, `envf`, `gain`, etc.
 
 #### Waveshaping (wshape)
 
@@ -169,6 +169,10 @@ Drives a sine wave through a nonlinear waveshaper. Works as a normal oscillator 
 3. **Press S1 again** to confirm and exit mode select
 
 Mode select also works from inside any special mode page. Pressing any other button exits mode select automatically.
+
+### Engine isolation
+
+Each engine has its own state slot. When you switch engines, your current settings are saved and the target engine's settings are restored. Tweak an FM patch, switch to classic, switch back — your FM tweaks are right where you left them. No parameter bleed between engines.
 
 ### Inside special mode pages
 
@@ -217,7 +221,7 @@ The **slop** parameter on the part page (knob 3) adds per-note random variation 
 - **Low values (10-30)**: Subtle warmth, slight detuning between voices
 - **High values (60-127)**: Wobbly, unstable, heavily vintage
 
-Each note-on generates fresh random offsets. In a chord, each voice drifts differently.
+Each note-on generates a fresh random pitch offset (gentle, up to ~0.5 semitone at max). Envelope attack, decay, and release also vary per voice with a stronger effect — at high slop values, each voice in a chord has noticeably different envelope timing.
 
 ---
 
@@ -249,7 +253,11 @@ Set knobs to 0 to lock that section. Turn up for more variation. Click the encod
 3. **Hold S8 during power-on** to flash the controller
 4. After reboot, go to OS info page, select each voicecard port (1-6), press S4 to flash
 
-Flash the controller first, then the voicecards.
+Flash the controller first, then all 6 voicecards.
+
+### EEPROM auto-reset
+
+When upgrading from an older firmware version, Carcosa automatically detects stale EEPROM data and resets to factory defaults on first boot. This ensures the correct init patch, voice allocation, and engine settings are loaded. No manual factory reset needed.
 
 ### Recovery
 
@@ -265,16 +273,16 @@ To revert to stock Ambika firmware, place the original `AMBIKA.BIN` and `VOICE*.
 
 | | Voicecard (ATmega328p) | Controller (ATmega644p) |
 |---|---|---|
-| Flash | 32,228 / 32,256 (99.9%) | ~60,000 / 65,536 (91%) |
-| RAM | 1,521 / 2,048 (74%) | ~3,900 / 4,096 (95%) |
+| Flash | 32,062 / 32,768 (97.8%) | 60,822 / 65,536 (92.8%) |
+| RAM | 1,521 / 2,048 (74%) | 3,706 / 4,096 (90%) |
 
 ### Changes from Stock Ambika
 
 **Removed:** CZ synthesis (9 variants), old 2-op FM, 8-bit land, dirty PWM, vowel synthesis, wavetable oscillators (16 + wavequence), step sequencer.
 
-**Added:** 4-op FM, Karplus-Strong, west coast wavefolder, waveshaping, looping envelopes, analog slop, smart randomizer, dedicated UI pages for special modes.
+**Added:** 4-op FM, Karplus-Strong, west coast wavefolder, waveshaping, looping envelopes, analog slop, smart randomizer, dedicated UI pages for special modes, per-engine mod destination names, per-engine state isolation, EEPROM auto-reset, extended octave range (-4/+4).
 
-**Bug fixes:** Note stack uninitialized variables, transient generator off-by-one, SPI bulk write bounds check, page group initialization size.
+**Bug fixes:** MIDI channel display (showed garbage for channels 1-16), engine switch parameter bleed, voicecard frame drops on engine switch, boot page routing, note stack uninitialized variables, transient generator off-by-one, SPI bulk write bounds check, page group initialization size.
 
 ### Patch Compatibility
 
