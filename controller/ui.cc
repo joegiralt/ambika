@@ -339,31 +339,56 @@ void Ui::DoEvents() {
         if (e.control_id == 0) {
           if (s1_held_) {
             // Mode select: cycle engine type via padding[2].
+            // Each engine gets its own slot for the shared patch bytes
+            // (offsets 0-15, 104) so switching engines preserves state.
             static const uint8_t pages[] PROGMEM = {
               PAGE_OSCILLATORS, PAGE_FM4OP,
               PAGE_KS_PLUCK, PAGE_WESTCOAST
             };
+
+            // Shared byte offsets: 0-15 plus 104 (feedback).
+            static const uint8_t kSharedCount = 17;
+            static const uint8_t shared_offsets[kSharedCount] PROGMEM = {
+              0, 1, 2, 3, 4, 5, 6, 7,
+              8, 9, 10, 11, 12, 13, 14, 15,
+              104
+            };
+
+            // Per-engine state slots, initialized with defaults.
+            // [engine][byte index] — 4 engines × 17 bytes = 68 bytes.
+            static uint8_t engine_state[ENGINE_LAST][kSharedCount] = {
+              // ENGINE_CLASSIC: saw osc, centered mix, everything else 0.
+              { WAVEFORM_SAW, 0, 0, 0, WAVEFORM_NONE, 0, 0, 0,
+                32, 0, 0, 0, 0, 0, 0, 0,  0 },
+              // ENGINE_FM4OP: algo 1, 1:1 ratios, gentle levels.
+              { WAVEFORM_SAW, 1, 4, 0, 0, 0, 4, 0,
+                4, 0, 4, 0, 20, 10, 10, 1,  0 },
+              // ENGINE_KS_PLUCK: moderate damping, centered body/position.
+              { 0, 40, 0, 0, 0, 64, 64, 64,
+                64, 0, 0, 0, 0, 0, 0, 0,  0 },
+              // ENGINE_WESTCOAST: sine, moderate fold.
+              { 0, 80, 0, 0, 0, 64, 0, 0,
+                64, 0, 0, 0, 0, 0, 0, 0,  0 },
+            };
+
             uint8_t* patch = multi.mutable_part(
                 state_.active_part)->mutable_raw_patch_data();
-            int8_t idx = patch[106];  // padding[2] = engine type
+            uint8_t prev = patch[106];  // current engine
+            int8_t idx = prev;
             idx += (static_cast<int8_t>(e.value) > 0) ? 1 : -1;
             if (idx < 0) idx = ENGINE_LAST - 1;
             if (idx >= ENGINE_LAST) idx = 0;
-            patch[106] = idx;
-            // When switching to classic, reset mixer and waveform.
-            if (idx == ENGINE_CLASSIC) {
-              if (patch[0] >= WAVEFORM_FM4OP) {
-                patch[0] = WAVEFORM_SAW;
-              }
-              patch[8] = 32;
-              patch[9] = 0;
-              patch[10] = 0;
-              patch[11] = 0;
-              patch[12] = 0;
-              patch[13] = 0;
-              patch[14] = 0;
-              patch[15] = 0;
+
+            // Save current engine's state.
+            for (uint8_t i = 0; i < kSharedCount; ++i) {
+              engine_state[prev][i] = patch[pgm_read_byte(&shared_offsets[i])];
             }
+            // Load target engine's state.
+            patch[106] = idx;
+            for (uint8_t i = 0; i < kSharedCount; ++i) {
+              patch[pgm_read_byte(&shared_offsets[i])] = engine_state[idx][i];
+            }
+
             multi.mutable_part(state_.active_part)->TouchPatch();
             ShowPage(static_cast<UiPageNumber>(
                 pgm_read_byte(&pages[idx])));

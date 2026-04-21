@@ -196,8 +196,8 @@ static const prog_Patch init_patch PROGMEM = {
   0, 0, 0,
   0, 0, 0,
   
-  // Padding
-  0, 0, 0, 0, 0, 0, 0, 0,
+  // Padding: [0]=feedback, [1]=unused, [2]=engine, [3-7]=unused
+  0, 0, ENGINE_FM4OP, 0, 0, 0, 0, 0,
 
   // Extra envelope-LFO settings (env4-7: ADSR + LFO shape/rate/curve/retrigger)
   0, 40, 20, 60, LFO_WAVEFORM_TRIANGLE, 0, 0, 0,
@@ -257,8 +257,8 @@ void Voice::Trigger(uint16_t note, uint8_t velocity, uint8_t legato) {
   uint8_t slop = patch_.padding[1];
   if (slop > 0) {
     int8_t rnd = static_cast<int8_t>(Random::GetByte());
-    // Scale: slop=127 gives ±~8 units (about ±0.5 semitone).
-    int16_t offset = (static_cast<int16_t>(rnd) * slop) >> 8;
+    // Scale: slop=127 gives ±~64 units (about ±0.5 semitone).
+    int16_t offset = (static_cast<int16_t>(rnd) * slop) >> 7;
     pitch_target_ += offset;
   }
 
@@ -454,7 +454,7 @@ inline void Voice::UpdateDestinations() {
   if (slop > 0) {
     env_slop = static_cast<int8_t>(
         (static_cast<int16_t>(modulation_sources_[MOD_SRC_RANDOM]) - 128) *
-        slop) >> 8;
+        slop) >> 6;
   }
 
   for (int i = 0; i < kNumEnvLfoSlots; ++i) {
@@ -503,11 +503,16 @@ inline void Voice::RenderOscillators() {
   uint8_t engine = patch_.padding[2];
 
   // Reset engine state when engine type changes.
+  // Only init the active engine — karplus_.Init() clears a 384-byte delay
+  // line which is too expensive to run unconditionally in the audio ISR.
   if (engine != last_engine_) {
     last_engine_ = engine;
-    fm4op_.Init();
-    karplus_.Init();
-    westcoast_.Init();
+    switch (engine) {
+      case ENGINE_FM4OP:    fm4op_.Init(); break;
+      case ENGINE_KS_PLUCK: karplus_.Init(); break;
+      case ENGINE_WESTCOAST: westcoast_.Init(); break;
+      default: break;
+    }
   }
 
   // --- 4-op FM mode ---

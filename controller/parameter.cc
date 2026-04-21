@@ -209,6 +209,8 @@ void Parameter::PrintValue(uint8_t value, char* buffer, uint8_t width) const {
     case UNIT_MIDI_CHANNEL:
       if (value == 0) {
         text = STR_RES_OMNI;
+      } else {
+        text = 0;
       }
   }
   
@@ -245,6 +247,58 @@ void Parameter::PrintValue(uint8_t value, char* buffer, uint8_t width) const {
       default: name = PSTR("?"); break;
     }
     strncpy_P(buffer, name, width);
+    AlignRight(buffer, width);
+    return;
+  }
+
+  // Engine-aware mod destination names for the mixer/osc destinations (0-11).
+  // Destinations 12+ (filter, envelope, vca) are the same across all engines.
+  if (unit == UNIT_MODULATION_DESTINATION && value < 12) {
+    uint8_t engine = multi.part(ui.state().active_part).raw_patch_data()[106];
+    // Packed 5-char short names and 7-char long names per engine.
+    // Order: prm1 prm2 osc1 osc2 1+2  vibr mix  xmod nois sub  fuzz crsh
+    static const prog_char dst_classic_short[] PROGMEM =
+        "prm1\0" "prm2\0" "osc1\0" "osc2\0" "1+2 \0" "vibr\0"
+        "mix \0" "xmod\0" "nois\0" "sub \0" "fuzz\0" "crsh\0";
+    static const prog_char dst_fm_short[] PROGMEM =
+        "algo\0" "wave\0" "osc1\0" "osc2\0" "1+2 \0" "vibr\0"
+        "rat3\0" "fin3\0" "lvl2\0" "lvl1\0" "lvl3\0" "lvl4\0";
+    static const prog_char dst_ks_short[] PROGMEM =
+        "damp\0" "colr\0" "ptch\0" "osc2\0" "1+2 \0" "vibr\0"
+        "body\0" "xmod\0" "stif\0" "emix\0" "feed\0" "sync\0";
+    static const prog_char dst_wc_short[] PROGMEM =
+        "fold\0" "sym \0" "ptch\0" "osc2\0" "1+2 \0" "vibr\0"
+        "bias\0" "colr\0" "envf\0" "gain\0" "sub \0" "sync\0";
+    static const prog_char dst_classic_long[] PROGMEM =
+        "param1\0" "param2\0" "osc 1 \0" "osc 2 \0" "osc1+2\0" "vibrat\0"
+        "mix   \0" "xmod  \0" "noise \0" "subosc\0" "fuzz  \0" "crush \0";
+    static const prog_char dst_fm_long[] PROGMEM =
+        "algo  \0" "waves \0" "osc 1 \0" "osc 2 \0" "osc1+2\0" "vibrat\0"
+        "rat 3 \0" "fine 3\0" "lvl 2 \0" "lvl 1 \0" "lvl 3 \0" "lvl 4 \0";
+    static const prog_char dst_ks_long[] PROGMEM =
+        "dampin\0" "color \0" "pitch \0" "osc 2 \0" "osc1+2\0" "vibrat\0"
+        "body  \0" "xmod  \0" "stiff \0" "ensmix\0" "feedbk\0" "sync  \0";
+    static const prog_char dst_wc_long[] PROGMEM =
+        "fold  \0" "symm  \0" "pitch \0" "osc 2 \0" "osc1+2\0" "vibrat\0"
+        "bias  \0" "color \0" "env>fl\0" "gain  \0" "sub   \0" "sync  \0";
+    const prog_char* table;
+    if (width > 5) {
+      static const prog_char* const long_tables[] PROGMEM = {
+        dst_classic_long, dst_fm_long, dst_ks_long, dst_wc_long
+      };
+      table = (engine < ENGINE_LAST)
+          ? (const prog_char*)pgm_read_word(&long_tables[engine])
+          : dst_classic_long;
+      memcpy_P(buffer, table + value * 7, width < 7 ? width : 7);
+    } else {
+      static const prog_char* const short_tables[] PROGMEM = {
+        dst_classic_short, dst_fm_short, dst_ks_short, dst_wc_short
+      };
+      table = (engine < ENGINE_LAST)
+          ? (const prog_char*)pgm_read_word(&short_tables[engine])
+          : dst_classic_short;
+      memcpy_P(buffer, table + value * 5, width < 5 ? width : 5);
+    }
     AlignRight(buffer, width);
     return;
   }
@@ -728,7 +782,7 @@ static const prog_Parameter parameters[kNumParameters] PROGMEM = {
   // 43
   { PARAMETER_LEVEL_PART,
     PRM_PART_OCTAVE,
-    UNIT_INT8, -2, 2,
+    UNIT_INT8, -4, 4,
     1, 0, 0xff, 0xff,
     STR_RES_OCTV, STR_RES_OCTAVE, STR_RES_PART },
   
