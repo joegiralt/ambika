@@ -36,7 +36,9 @@ static const int16_t kHighestNote = 120 * 128;
 static const int16_t kOctave = 12 * 128;
 static const int16_t kPitchTableStart = 116 * 128;
 
-static inline uint16_t ComputePhaseIncrement(int16_t pitch) {
+// Phase increment with 8 fractional bits (16.8), so low notes keep the
+// precision the octave shifts would otherwise throw away.
+static inline uint32_t ComputePhaseIncrementFine(int16_t pitch) {
   if (pitch >= kHighestNote) pitch = kHighestNote;
   int16_t ref_pitch = pitch - kPitchTableStart;
   uint8_t num_shifts = 0;
@@ -44,12 +46,14 @@ static inline uint16_t ComputePhaseIncrement(int16_t pitch) {
     ref_pitch += kOctave;
     ++num_shifts;
   }
-  uint16_t increment = ResourcesManager::Lookup<uint16_t, uint16_t>(
-      lut_res_oscillator_increments, ref_pitch >> 1);
-  while (num_shifts--) {
-    increment >>= 1;
-  }
-  return increment;
+  uint32_t increment = static_cast<uint32_t>(
+      ResourcesManager::Lookup<uint16_t, uint16_t>(
+          lut_res_oscillator_increments, ref_pitch >> 1)) << 8;
+  return increment >> num_shifts;
+}
+
+static inline uint16_t ComputePhaseIncrement(int16_t pitch) {
+  return ComputePhaseIncrementFine(pitch) >> 8;
 }
 
 // This mirrors the beginning of the Part data structure in the controller.
@@ -126,6 +130,7 @@ class Voice {
 
  private:
   static inline void LoadSources() __attribute__((always_inline));
+  static void ExpandHalfRate();
   static inline void ProcessModulationMatrix() __attribute__((always_inline));
   static inline void UpdateDestinations() __attribute__((always_inline));
   static inline void RenderOscillators() __attribute__((always_inline));
@@ -150,8 +155,16 @@ class Voice {
   static int16_t pitch_target_;
   static int16_t pitch_value_;
   
-  static uint8_t buffer_[kAudioBlockSize];
-  static uint8_t osc2_buffer_[kAudioBlockSize];
+  // The classic engine renders two 8-bit oscillators; FM/KS/WC render one
+  // 12-bit stream. Same 80 bytes of RAM, shared.
+  union RenderBuffer {
+    struct {
+      uint8_t osc1[kAudioBlockSize];
+      uint8_t osc2[kAudioBlockSize];
+    } narrow;
+    uint16_t wide[kAudioBlockSize];
+  };
+  static RenderBuffer render_;
   static uint8_t sync_state_[kAudioBlockSize];
   static uint8_t no_sync_[kAudioBlockSize];
   static uint8_t dummy_sync_state_[kAudioBlockSize];

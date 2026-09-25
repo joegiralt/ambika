@@ -22,7 +22,6 @@ enum WcWaveform {
 
 // Patch field mapping for west coast mode:
 // Page 1:
-//   osc[0].shape     (0)  = WAVEFORM_WESTCOAST
 //   osc[0].parameter (1)  = fold depth
 //   osc[0].range     (2)  = pitch range
 //   osc[0].detune    (3)  = fine tune
@@ -34,64 +33,33 @@ enum WcWaveform {
 //   mix_op           (9)  = drive
 //   mix_parameter    (10) = color
 // Page 2:
-//   mix_sub_osc_shape(11) = fold stages (1-6)
+//   mix_sub_osc_shape(11) = fold stages (not used by the engine)
 //   mix_sub_osc      (12) = input gain
 //   mix_noise        (13) = envelope-to-fold amount
 //   mix_fuzz         (14) = sub-harmonic level
 //   mix_crush        (15) = sync amount
-//   padding[1]       (105)= pitch range (moved)
 
 class WestCoast {
  public:
   WestCoast() { }
 
   void Init() {
-    phase_ = 0;
-    mod_phase_ = 0;
-    sub_phase_ = 0;
-    sync_phase_ = 0;
-    lp_state1_ = 128;
-    lp_state2_ = 128;
+    phase_ = mod_phase_ = sub_phase_ = sync_phase_ = 0;
+    lp_state1_ = lp_state2_ = 0;
   }
 
-  // Buchla-style wavefolder.
-  // Quadratic gain curve: gentle at low settings, extreme at high.
-  // fold_depth 0 = clean sine, 64 = ~4 folds, 127 = ~16 folds.
-  static inline uint8_t Fold(int16_t input, uint8_t fold_depth,
-                             uint8_t symmetry, uint8_t bias) {
-    // Bias and symmetry: DC offsets that shift the fold point.
-    // Symmetry creates even harmonics, bias shifts the waveform.
-    input += static_cast<int8_t>(bias - 64);
-    if (symmetry != 64) {
-      input += (static_cast<int16_t>(symmetry) - 64);
+  // Buchla-style wavefolder on a signed 16-bit sample: reflect at full
+  // scale, as many times as needed, in constant time (a triangle wave of the
+  // input with period 2^17).
+  static inline int16_t Fold(int32_t x) {
+    uint32_t u = static_cast<uint32_t>(x + 32768) & 0x1FFFF;
+    if (u & 0x10000) {
+      u = 0x1FFFF - u;
     }
-
-    // Quadratic gain: matches real wavefolder knob feel.
-    // 0→1x, 32→~3x, 64→~9x, 96→~18x, 127→~33x
-    if (fold_depth > 0) {
-      uint16_t gain = 128 + (static_cast<uint16_t>(fold_depth) * fold_depth >> 2);
-      int32_t g = static_cast<int32_t>(input) * gain;
-      input = g >> 7;
-    }
-
-    // Iterative fold: reflect at ±127 boundaries.
-    // Each reflection adds harmonic content.
-    for (uint8_t i = 0; i < 16; ++i) {
-      if (input > 127) {
-        input = 254 - input;
-      } else if (input < -128) {
-        input = -256 - input;
-      } else {
-        break;
-      }
-    }
-
-    if (input > 127) input = 127;
-    if (input < -128) input = -128;
-
-    return static_cast<uint8_t>(input + 128);
+    return static_cast<int16_t>(u - 32768);
   }
 
+  // phase_increment: 16.8 fixed point (ComputePhaseIncrementFine).
   void Render(
       uint8_t base_waveform,
       uint8_t fold_depth,
@@ -101,125 +69,120 @@ class WestCoast {
       int8_t fm_ratio,
       uint8_t drive,
       uint8_t color,
-      uint8_t fold_stages,
       uint8_t input_gain,
       uint8_t env_to_fold,
       uint8_t sub_level,
       uint8_t sync_amount,
       uint8_t env_value,
-      uint16_t phase_increment,
-      uint8_t* buffer,
+      uint32_t phase_increment,
+      uint16_t* buffer,
       uint8_t size) {
 
     // FM modulator increment.
-    uint16_t mod_increment;
+    uint32_t mod_increment;
     if (fm_ratio <= 0) {
       uint8_t shift = 1 - fm_ratio;
-      if (shift > 15) shift = 15;
+      if (shift > 24) shift = 24;
       mod_increment = phase_increment >> shift;
-    } else if (fm_ratio == 1) {
-      mod_increment = phase_increment;
     } else {
       mod_increment = phase_increment * static_cast<uint8_t>(fm_ratio);
     }
+    uint32_t sub_increment = phase_increment >> 1;
+    uint32_t sync_increment = sync_amount ?
+        phase_increment + ((phase_increment >> 5) * sync_amount) : 0;
 
-    // Sub-oscillator: one octave down.
-    uint16_t sub_increment = phase_increment >> 1;
-
-    // Combine fold depth with drive, input gain, and envelope.
-    uint16_t effective_fold = fold_depth;
-    // Drive and input gain boost the fold amount.
-    effective_fold += (drive >> 1) + (input_gain >> 1);
-    // Envelope-to-fold: the classic Buchla trick.
-    // Sweeping fold with an envelope creates the plucked timbre.
-    if (env_to_fold > 0) {
-      effective_fold += (static_cast<uint16_t>(env_value) * env_to_fold) >> 8;
+    // Fold amount: depth, plus drive, input gain and the envelope.
+    uint16_t amount = fold_depth + (drive >> 1) + (input_gain >> 1);
+    if (env_to_fold) {
+      amount += U8U8MulShift8(env_value, env_to_fold);
     }
-    if (effective_fold > 127) effective_fold = 127;
-
-    // Sync increment (for self-sync, faster than fundamental).
-    uint16_t sync_increment = 0;
-    if (sync_amount > 0) {
-      sync_increment = phase_increment +
-          ((static_cast<uint32_t>(phase_increment) * sync_amount) >> 5);
+    if (amount > 127) amount = 127;
+    // Quadratic gain: 0 -> 1x, 64 -> ~9x, 127 -> ~33x. In 1/128ths, with
+    // the input gain folded in.
+    // At most ~8290 (~12400 with symmetry): fits int16, so the per-sample
+    // multiply below can use avr-gcc's fast 16x16->32 routine.
+    int16_t gain = 128 + ((amount * amount) >> 2);
+    if (input_gain) {
+      gain = (static_cast<uint32_t>(gain) * (128 + input_gain)) >> 7;
     }
+    // Bias: a DC offset added before the gain, so at high fold it slides the
+    // whole fold pattern (64 = centered, up to +/-half scale). At half scale
+    // here, like the sample below, so the sum fits 16 bits.
+    int16_t half_bias = (static_cast<int16_t>(bias) - 64) * 128;
+    // Symmetry: different gains for the positive and negative halves
+    // (0.5x-1.5x), so the waveform leans to one side (64 = symmetric).
+    int16_t lean = static_cast<int16_t>(symmetry) - 64;
+    int16_t gain_positive = gain + ((static_cast<int32_t>(gain) * lean) >> 7);
+    int16_t gain_negative = gain - ((static_cast<int32_t>(gain) * lean) >> 7);
 
-    // Color: 2-pole low-pass (12dB/oct) for steep rolloff after folder.
-    // 0 = very dark (only fundamental), 127 = bright (all harmonics).
-    // Min coeff 16 ensures fundamental passes through at darkest setting.
-    uint16_t lp16 = 16 + (static_cast<uint16_t>(color) << 1);
-    uint8_t lp_coeff = (lp16 > 255) ? 255 : lp16;
+    // Color: 2-pole low-pass after the folder; 124+ is bypassed.
+    uint8_t lp = 16 + (color << 1) > 255 ? 255 : 16 + (color << 1);
 
     while (size--) {
-      // FM modulation.
       mod_phase_ += mod_increment;
-      uint16_t fm_mod = 0;
-      if (fm_depth > 0) {
-        uint16_t mod_val = InterpolateSine16(mod_phase_);
-        fm_mod = (static_cast<int32_t>(mod_val - 32768) * fm_depth) >> 8;
+      uint16_t fm = 0;
+      if (fm_depth) {
+        int16_t m = static_cast<int16_t>(
+            InterpolateSine16(mod_phase_ >> 8) - 32768);
+        fm = S16U8MulShift8(m, fm_depth);
       }
 
-      // Self-sync: reset phase when sync oscillator wraps.
-      if (sync_amount > 0) {
-        uint16_t old_sync = sync_phase_;
+      if (sync_amount) {
+        uint32_t old = sync_phase_;
         sync_phase_ += sync_increment;
-        if (sync_phase_ < old_sync) {
+        if (static_cast<uint16_t>(sync_phase_ >> 8) <
+            static_cast<uint16_t>(old >> 8)) {
           phase_ = 0;
         }
       }
 
-      // Base oscillator.
       phase_ += phase_increment;
+      uint16_t p = (phase_ >> 8) + fm;
       int16_t sample;
-
       if (base_waveform == WC_WAVE_TRIANGLE) {
-        uint16_t tri_phase = phase_ + fm_mod;
-        if (tri_phase & 0x8000) {
-          sample = static_cast<int16_t>(tri_phase >> 7) - 128;
-        } else {
-          sample = 127 - static_cast<int16_t>(tri_phase >> 7);
-        }
+        // Down from full scale over the first half, back up over the second
+        // (unsigned 16-bit math: AVR's int is 16 bits).
+        uint16_t r = (p & 0x7FFF) << 1;
+        sample = static_cast<int16_t>(
+            (p & 0x8000) ? static_cast<uint16_t>(r - 32768u)
+                         : static_cast<uint16_t>(32767u - r));
       } else {
-        uint16_t sine = InterpolateSine16(phase_ + fm_mod);
-        sample = static_cast<int16_t>(sine >> 8) - 128;
+        sample = static_cast<int16_t>(InterpolateSine16(p) - 32768);
       }
 
-      // Apply input gain to the raw waveform before folding.
-      if (input_gain > 0) {
-        sample = (sample * (128 + input_gain)) >> 7;
-      }
+      // (gain in 1/128ths: sample * gain >> 7, in 32 bits.)
+      int16_t x = (sample >> 1) + half_bias;
+      int16_t g = x >= 0 ? gain_positive : gain_negative;
+      int16_t y = Fold((static_cast<int32_t>(x) * static_cast<int32_t>(g)) >> 6);
 
-      // Wavefolder.
-      uint8_t folded = Fold(sample, effective_fold, symmetry, bias);
-
-      // Post-fold color: 2-pole IIR for steep rolloff (12dB/oct).
       if (color < 124) {
-        // Pole 1
-        lp_state1_ += (static_cast<int16_t>(folded - lp_state1_) * lp_coeff) >> 8;
-        // Pole 2
-        lp_state2_ += (static_cast<int16_t>(lp_state1_ - lp_state2_) * lp_coeff) >> 8;
-        folded = lp_state2_;
+        // Written as a - a*k + b*k so nothing overflows 16 bits.
+        lp_state1_ += S16U8MulShift8(y, lp) - S16U8MulShift8(lp_state1_, lp);
+        lp_state2_ += S16U8MulShift8(lp_state1_, lp) -
+            S16U8MulShift8(lp_state2_, lp);
+        y = lp_state2_;
       }
 
-      // Mix in sub-harmonic.
-      if (sub_level > 0) {
+      if (sub_level) {
         sub_phase_ += sub_increment;
-        uint8_t sub = InterpolateSample(wav_res_sine, sub_phase_);
-        folded = ((uint16_t)folded * (256 - sub_level) +
-                  (uint16_t)sub * sub_level) >> 8;
+        // Mixed in after the folder at up to half level: the 8-bit sine
+        // is plenty.
+        int16_t sub = (static_cast<int16_t>(InterpolateSample(
+            wav_res_sine, sub_phase_ >> 8)) - 128) * 256;
+        y = y - S16U8MulShift8(y, sub_level) + S16U8MulShift8(sub, sub_level);
       }
 
-      *buffer++ = folded;
+      *buffer++ = (y >> 4) + 2048;  // 12-bit DAC sample
     }
   }
 
  private:
-  uint16_t phase_;
-  uint16_t mod_phase_;
-  uint16_t sub_phase_;
-  uint16_t sync_phase_;
-  uint8_t lp_state1_;
-  uint8_t lp_state2_;
+  uint32_t phase_;
+  uint32_t mod_phase_;
+  uint32_t sub_phase_;
+  uint32_t sync_phase_;
+  int16_t lp_state1_;
+  int16_t lp_state2_;
 
   DISALLOW_COPY_AND_ASSIGN(WestCoast);
 };

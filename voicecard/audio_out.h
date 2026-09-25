@@ -27,8 +27,9 @@
 
 namespace ambika {
 
+// 12-bit samples for the DAC, centered on 2048.
 struct AudioBufferSpecs {
-  typedef uint8_t Value;
+  typedef uint16_t Value;
   enum {
     buffer_size = 128,
     data_size = 8,

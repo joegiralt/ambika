@@ -70,12 +70,12 @@ ISR(TIMER2_OVF_vect) {
     vca_12bits.value = next_vca_value | 0x1000;
   }
   
-  uint8_t sample = audio_buffer.ImmediateRead();
+  uint16_t sample = audio_buffer.ImmediateRead();  // 12 bits
   if (++sample_counter >= voice.crush()) {
     dac_interface.Strobe();
     sample_counter = 0;
     Word sample_12bits;
-    sample_12bits.value = (sample * dac_scale) | 0x9000;
+    sample_12bits.value = sample | 0x9000;
     dac_interface.Overwrite(sample_12bits.bytes[1]);
     dac_interface.Overwrite(sample_12bits.bytes[0]);
   }
