@@ -335,6 +335,17 @@ static double AutocorrFrequency(int n) {
   return 0;
 }
 
+// Frequency (cycles per sample) of the strongest partial within +/-120
+// cents of `f`, searched in 1-cent steps over the whole capture.
+static double PartialNear(int n, double f) {
+  double best = 0, best_f = f;
+  for (int c = -120; c <= 120; ++c) {
+    double g = f * pow(2, c / 1200.0), p = Goertzel(n, g);
+    if (p > best) { best = p; best_f = g; }
+  }
+  return best_f;
+}
+
 // The first note after a patch load (which resets the engines) sounds.
 static void TestKsFirstNoteAfterPatchLoad() {
   SetupKs();
@@ -351,12 +362,223 @@ static void TestKsInTune() {
   for (uint8_t i = 0; i < sizeof(notes); ++i) {
     SetupKs();
     int n = Play(notes[i], 60);
-    double f = AutocorrFrequency(n);
-    double cents = f > 0 ? 1200 * log2(f / ExpectedFrequency(notes[i])) : 9999;
+    // The fundamental itself: with a metallic (stretched) string,
+    // autocorrelation reads a compromise pulled sharp by the overtones.
+    double f = PartialNear(n, ExpectedFrequency(notes[i]));
+    double cents = 1200 * log2(f / ExpectedFrequency(notes[i]));
     double limit = notes[i] + 12 <= 81 ? 5 : 20;
     CHECK(fabs(cents) < limit, "KS MIDI note %d is %.1f cents off",
           notes[i] + 12, cents);
   }
+}
+
+// Plucks a KS note and runs until the AC level (20 ms windows, mean
+// removed) falls 20 dB below its peak. Returns seconds (-1: never, within
+// max_s) and the DC offset of the last window, in 12-bit units.
+static double KsRing(uint8_t note, double max_s, double* dc_out) {
+  voice.ResetEngines();
+  audio_buffer.size = 0;
+  voice.ProcessBlock();
+  voice.Trigger((note + 12) << 7, 127, 0);
+  double peak = 0, acc = 0, sum = 0, dc = 0;
+  int count = 0;
+  for (int blk = 0; blk < max_s * 980; ++blk) {
+    audio_buffer.size = 0;
+    voice.ProcessBlock();
+    for (int i = 0; i < audio_buffer.size; ++i) {
+      double v = audio_buffer.data[i] - 2048.0;
+      acc += v * v;
+      sum += v;
+    }
+    if (++count == 20) {
+      double m = sum / 800;
+      double e = sqrt(acc / 800 - m * m);
+      dc = m;
+      if (e > peak) peak = e;
+      else if (e < peak / 10) { if (dc_out) *dc_out = dc; return blk / 980.4; }
+      acc = sum = 0;
+      count = 0;
+    }
+  }
+  if (dc_out) *dc_out = dc;
+  return -1;
+}
+
+// Seconds for a KS note's fundamental to fall 20 dB, measured after the
+// attack (Goertzel at the fundamental, 0.3 s vs 1.3 s), same pluck each run.
+static double KsFundamentalDecay(uint8_t note, uint8_t damping) {
+  SetupKs();
+  patch()->osc[0].parameter = damping;
+  voice.ResetEngines();
+  audio_buffer.size = 0;
+  voice.ProcessBlock();
+  Random::Seed(12345);
+  voice.Trigger((note + 12) << 7, 127, 0);
+  const double f = ExpectedFrequency(note);
+  double level[2];
+  int blk = 0;
+  for (int k = 0; k < 2; ++k) {
+    int start = k ? 1274 : 294, end = start + 98;  // 0.3 s and 1.3 s, 0.1 s
+    double c = 2 * cos(2 * M_PI * f), s1 = 0, s2 = 0;
+    for (; blk < end; ++blk) {
+      audio_buffer.size = 0;
+      voice.ProcessBlock();
+      if (blk < start) continue;
+      for (int i = 0; i < audio_buffer.size; ++i) {
+        double s0 = (audio_buffer.data[i] - 2048.0) + c * s1 - s2;
+        s2 = s1;
+        s1 = s0;
+      }
+    }
+    level[k] = sqrt(s1 * s1 + s2 * s2 - c * s1 * s2);
+  }
+  return 20 / (20 * log10(level[0] / level[1]));
+}
+
+// Strings ring about three times longer than the original loop: at damping
+// 40 the fundamental took 4.2 s (A3) and 0.8 s (A4) to fall 20 dB.
+static void TestKsRingsLonger() {
+  double a3 = KsFundamentalDecay(45, 40), a4 = KsFundamentalDecay(57, 40);
+  CHECK(a3 >= 11, "A3 fundamental falls 20 dB in %.1f s (was 4.2)", a3);
+  CHECK(a4 >= 2.1, "A4 fundamental falls 20 dB in %.1f s (was 0.8)", a4);
+}
+
+// A pluck leaves no DC offset in the string (a KS loop keeps DC forever):
+// the average over 0.5 s (hundreds of cycles, so the note itself cancels)
+// starting 1 s after the pluck.
+static void TestKsNoDcOffset() {
+  SetupKs();
+  patch()->osc[0].parameter = 40;
+  voice.ResetEngines();
+  audio_buffer.size = 0;
+  voice.ProcessBlock();
+  voice.Trigger((57 + 12) << 7, 127, 0);
+  double sum = 0;
+  int n = 0;
+  for (int blk = 0; blk < 1470; ++blk) {  // 1.5 s
+    audio_buffer.size = 0;
+    voice.ProcessBlock();
+    if (blk < 980) continue;
+    for (int i = 0; i < audio_buffer.size; ++i, ++n) {
+      sum += audio_buffer.data[i] - 2048.0;
+    }
+  }
+  double dc = sum / n;
+  CHECK(fabs(dc) < 10, "string holds a DC offset of %.1f (of 2048)", dc);
+}
+
+// Body is a resonance after the string: it never moves the pitch.
+static void TestKsBodyKeepsPitch() {
+  const uint8_t notes[] = { 45, 57 };  // A3, A4
+  const uint8_t bodies[] = { 0, 60, 120 };
+  for (uint8_t i = 0; i < sizeof(notes); ++i) {
+    for (uint8_t j = 0; j < sizeof(bodies); ++j) {
+      SetupKs();
+      patch()->mix_balance = bodies[j];
+      int n = Play(notes[i], 60);
+      double cents = 1200 * log2(PartialNear(n, ExpectedFrequency(notes[i])) /
+                                 ExpectedFrequency(notes[i]));
+      CHECK(fabs(cents) < 5, "MIDI %d at body %d is %.1f cents off",
+            notes[i] + 12, bodies[j], cents);
+    }
+  }
+}
+
+// Body is a soundbox: a fixed resonance (~195 Hz) that boosts whatever
+// falls near it whatever note is played (G3's fundamental, 196 Hz), and a
+// softening of the partials well above it (A3's 4th harmonic, 880 Hz).
+// Same pluck each run, so only body changes.
+static double KsPartialWithBody(uint8_t note, int harmonic, uint8_t body) {
+  SetupKs();
+  patch()->mix_balance = body;
+  Random::Seed(4321);
+  int n = Play(note, 60);
+  return Goertzel(n, harmonic * ExpectedFrequency(note));
+}
+
+static void TestKsBodyResonates() {
+  double g3 = 10 * log10(KsPartialWithBody(43, 1, 120) /
+                         KsPartialWithBody(43, 1, 0));
+  CHECK(g3 > 6, "body boosts G3's 196 Hz fundamental by only %.1f dB", g3);
+  // A3's 4th and 6th harmonics (880, 1320 Hz) get quieter in absolute terms.
+  for (int h = 4; h <= 6; h += 2) {
+    double d = 10 * log10(KsPartialWithBody(45, h, 120) /
+                          KsPartialWithBody(45, h, 0));
+    CHECK(d < -6, "body changes A3's harmonic %d by only %.1f dB", h, d);
+  }
+}
+
+// Full body on a note right on the resonance (G3, 196 Hz) stays out of the
+// output clamp: the body tilts the tone, it doesn't overdrive it.
+static void TestKsBodyDoesNotClip() {
+  SetupKs();
+  patch()->mix_balance = 127;
+  Random::Seed(4321);
+  int n = Play(43, 60);
+  int clipped = 0;
+  for (int i = 0; i < n; ++i) {
+    if (out16[i] <= 0 || out16[i] >= 4095) ++clipped;
+  }
+  CHECK(clipped == 0, "full body on G3 clips %d samples", clipped);
+}
+
+// Body is audible across its range, not just at the top: at body 64, A3's
+// fundamental rises and its 6th harmonic falls by a few dB each.
+static void TestKsBodyAtHalf() {
+  double h1 = 10 * log10(KsPartialWithBody(45, 1, 64) /
+                         KsPartialWithBody(45, 1, 0));
+  double h6 = 10 * log10(KsPartialWithBody(45, 6, 64) /
+                         KsPartialWithBody(45, 6, 0));
+  CHECK(h1 - h6 > 15, "body 64 tilts A3 by only %.1f dB (H1 %+.1f, H6 %+.1f)",
+        h1 - h6, h1, h6);
+  double f1 = 10 * log10(KsPartialWithBody(45, 1, 127) /
+                         KsPartialWithBody(45, 1, 0));
+  double f6 = 10 * log10(KsPartialWithBody(45, 6, 127) /
+                         KsPartialWithBody(45, 6, 0));
+  CHECK(f1 - f6 > 25, "full body tilts A3 by only %.1f dB (H1 %+.1f, H6 %+.1f)",
+        f1 - f6, f1, f6);
+}
+
+// Cents between A4's 8th partial and 8x its fundamental, at a given color.
+static double KsStretch(uint8_t color) {
+  SetupKs();
+  patch()->osc[1].parameter = color;
+  Random::Seed(4321);
+  int n = Play(57, 900);
+  double f1 = PartialNear(n, ExpectedFrequency(57));
+  double f8 = PartialNear(n, 8 * f1);
+  return 1200 * log2(f8 / (8 * f1));
+}
+
+// Bright excitation color makes the string metallic: overtones stretched
+// sharp (dispersion). Up to the middle of the range the string stays
+// harmonic.
+static void TestKsBrightColorIsMetallic() {
+  double bright = KsStretch(127), mid = KsStretch(64);
+  CHECK(bright > 30, "color 127 stretches A4's 8th partial only %.1f cents",
+        bright);
+  CHECK(fabs(mid) < 5, "color 64 already stretches A4's 8th partial %.1f cents",
+        mid);
+}
+
+// The ensemble is a chorus: it detunes gently, keeping the energy at the
+// note's harmonics. An audio-rate LFO or stepping read heads smear energy in
+// between (the dry string sits near -64 dB there).
+static void TestKsChorusIsClean() {
+  SetupKs();
+  patch()->mix_sub_osc = 100;       // ensemble mix
+  patch()->mix_parameter = 70;      // depth
+  patch()->mix_op = 20;             // rate
+  patch()->mix_sub_osc_shape = 40;  // spread
+  Random::Seed(4321);
+  int n = Play(45, 400);  // A3
+  double f0 = ExpectedFrequency(45), at = 0, between = 0;
+  for (int k = 1; k <= 8; ++k) {
+    at += Goertzel(n, k * f0);
+    between += Goertzel(n, (k + 0.5) * f0);
+  }
+  double db = 10 * log10(between / at);
+  CHECK(db < -45, "chorus puts energy between harmonics at %.1f dB", db);
 }
 
 // Mod matrix destinations reach the KS engine ("body").
@@ -510,6 +732,14 @@ int main() {
   TestKsFirstNoteAfterPatchLoad();
   TestKsInTune();
   TestKsModMatrix();
+  TestKsRingsLonger();
+  TestKsNoDcOffset();
+  TestKsBodyKeepsPitch();
+  TestKsBodyResonates();
+  TestKsBodyDoesNotClip();
+  TestKsBodyAtHalf();
+  TestKsBrightColorIsMetallic();
+  TestKsChorusIsClean();
   TestWcLowNotesInTune();
   TestWcFoldIsSmooth();
   TestWcModMatrix();

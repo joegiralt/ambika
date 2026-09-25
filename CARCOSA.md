@@ -95,9 +95,9 @@ Physical model of a plucked string. A noise burst excites a tuned delay line wit
 | Knob | Label | Range | Description |
 |------|-------|-------|-------------|
 | 1 | damp | 0-127 | Damping (high = darker, faster decay) |
-| 2 | colr | 0-127 | Excitation brightness |
+| 2 | colr | 0-127 | Excitation brightness; above 64 the string turns metallic (overtones stretched sharp, more on higher notes) |
 | 3 | dcay | 0-127 | Overall decay rate |
-| 4 | body | 0-127 | Body resonance (comb filter at half delay) |
+| 4 | body | 0-127 | Soundbox resonance: a fixed ~195 Hz body formant after the string (colours the tone, never moves the pitch) |
 | 5 | rang | -24/+24 | Pitch range (semitones) |
 | 6 | tune | -64/+63 | Fine tuning |
 | 7 | pos | 0-127 | Pluck position (changes harmonic content) |

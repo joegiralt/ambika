@@ -1124,6 +1124,7 @@ inline void Voice::RenderOscillators() {
         dst_[MOD_DST_MIX_SUB_OSC] >> 7,              // ensemble mix
         dst_[MOD_DST_MIX_NOISE] >> 7,                // stiffness
         dst_[MOD_DST_MIX_FUZZ] >> 7,                 // sustain
+        U15ShiftRight7(dst_[MOD_DST_PARAMETER_2]),   // color (metallic)
         render_.wide, kAudioBlockSize >> 1);
     ExpandHalfRate();
 
