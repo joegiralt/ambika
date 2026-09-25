@@ -4,7 +4,6 @@
 
 set -e
 
-SDCARD="${1:-/mnt/sdcard}"
 BUILD_DIR="build"
 CONTROLLER_BIN="$BUILD_DIR/ambika_controller/ambika_controller.bin"
 VOICECARD_BIN="$BUILD_DIR/ambika_voicecard/ambika_voicecard.bin"
@@ -22,38 +21,51 @@ if [ ! -f "$VOICECARD_BIN" ]; then
     exit 1
 fi
 
-# Find SD card if not mounted
-if [ ! -d "$SDCARD" ]; then
-    echo "Mount point $SDCARD does not exist."
-    # Try to find and mount the SD card
-    DEVICE=$(lsblk -rno NAME,FSTYPE | grep vfat | grep mmc | head -1 | awk '{print $1}')
+find_card() {
+    lsblk -rno NAME,FSTYPE | grep vfat | grep mmc | head -1 | awk '{print $1}'
+}
+
+if [ -n "$1" ]; then
+    SDCARD="$1"
+else
+    # Prefer a card the desktop already mounted (udisks: /media/$USER/LABEL).
+    DEVICE=$(find_card)
+    if [ -n "$DEVICE" ]; then
+        SDCARD=$(lsblk -rno MOUNTPOINT "/dev/$DEVICE" | head -1)
+    fi
+    SDCARD="${SDCARD:-/mnt/sdcard}"
+fi
+
+# Mount it ourselves if it isn't mounted yet
+if ! mountpoint -q "$SDCARD" 2>/dev/null; then
+    DEVICE=$(find_card)
     if [ -z "$DEVICE" ]; then
         echo "Error: No SD card found"
         exit 1
     fi
     echo "Found SD card at /dev/$DEVICE"
-    sudo mkdir -p "$SDCARD"
-    sudo mount "/dev/$DEVICE" "$SDCARD"
+    if command -v udisksctl >/dev/null 2>&1; then
+        SDCARD=$(udisksctl mount -b "/dev/$DEVICE" | sed 's/.* at //' | tr -d '.')
+    else
+        sudo mkdir -p "$SDCARD"
+        sudo mount "/dev/$DEVICE" "$SDCARD"
+    fi
     echo "Mounted at $SDCARD"
 fi
 
-# Check it's actually mounted
-if ! mountpoint -q "$SDCARD" 2>/dev/null; then
-    DEVICE=$(lsblk -rno NAME,FSTYPE | grep vfat | grep mmc | head -1 | awk '{print $1}')
-    if [ -z "$DEVICE" ]; then
-        echo "Error: No SD card found"
-        exit 1
-    fi
-    sudo mount "/dev/$DEVICE" "$SDCARD"
-    echo "Mounted /dev/$DEVICE at $SDCARD"
+# Only escalate if the card isn't already writable as us
+if [ -w "$SDCARD" ]; then
+    SUDO=""
+else
+    SUDO="sudo"
 fi
 
-echo "Copying firmware to SD card..."
-sudo cp "$CONTROLLER_BIN" "$SDCARD/AMBIKA.BIN"
+echo "Copying firmware to $SDCARD..."
+$SUDO cp "$CONTROLLER_BIN" "$SDCARD/AMBIKA.BIN"
 echo "  AMBIKA.BIN  (controller: $(stat -c%s "$CONTROLLER_BIN") bytes)"
 
 for i in 1 2 3 4 5 6; do
-    sudo cp "$VOICECARD_BIN" "$SDCARD/VOICE${i}.BIN"
+    $SUDO cp "$VOICECARD_BIN" "$SDCARD/VOICE${i}.BIN"
 done
 echo "  VOICE1-6.BIN (voicecard: $(stat -c%s "$VOICECARD_BIN") bytes)"
 
@@ -61,12 +73,18 @@ echo "  VOICE1-6.BIN (voicecard: $(stat -c%s "$VOICECARD_BIN") bytes)"
 echo ""
 echo "Generating factory patches..."
 PATCH_STAGING=$(mktemp -d)
-python3 tools/make_patches.py "$PATCH_STAGING"
-sudo mkdir -p "$SDCARD/PATCH/BANK/C"
-sudo cp "$PATCH_STAGING/PATCH/BANK/C/"*.PAT "$SDCARD/PATCH/BANK/C/" 2>/dev/null || true
+python3 make_patches.py "$PATCH_STAGING" > /dev/null
+
+# Copy every bank the generator produced, leaving other banks on the card alone
+for BANK_DIR in "$PATCH_STAGING"/PATCH/BANK/*/; do
+    BANK=$(basename "$BANK_DIR")
+    $SUDO mkdir -p "$SDCARD/PATCH/BANK/$BANK"
+    $SUDO cp "$BANK_DIR"*.PAT "$SDCARD/PATCH/BANK/$BANK/"
+    echo "  Bank $BANK: $(ls -1 "$BANK_DIR"*.PAT | wc -l) patches"
+done
 rm -rf "$PATCH_STAGING"
 
-sudo sync
+$SUDO sync
 echo ""
 echo "Done. Safe to eject SD card."
 echo ""
