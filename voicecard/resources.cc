@@ -2298,8 +2298,8 @@ const prog_uint8_t wav_res_wavetables[] PROGMEM = {
 
 
 const prog_uint8_t* const waveform_table[] = {
-  wav_res_formant_sine,
-  wav_res_formant_square,
+  NULL,
+  NULL,
   wav_res_sine,
   wav_res_bandlimited_square_0,
   wav_res_bandlimited_square_1,
@@ -2322,12 +2322,6 @@ const prog_uint8_t* const waveform_table[] = {
   wav_res_bandlimited_triangle_4,
   wav_res_bandlimited_triangle_5,
   wav_res_sine,
-  wav_res_vowel_data,
-  wav_res_distortion,
-  wav_res_lfo_waveforms,
-  wav_res_env_expo,
-  wav_res_waves,
-  wav_res_wavetables,
 };
 
 
