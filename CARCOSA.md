@@ -1,9 +1,19 @@
-# Carcosa v2.06
+# Carcosa v3.0
 ## Custom firmware for the Ambika polysynth
 
 Carcosa replaces the stock Ambika firmware with a focused set of synthesis engines, expanded envelope capabilities, and a streamlined interface.
 
 Based on the original Ambika firmware by Emilie Gillet (Mutable Instruments).
+
+### What's new in 3.0
+
+- **12-bit audio:** the engines now send the voicecard DAC all 12 bits instead of 8, removing the 8-bit hiss (about 24 dB less noise).
+- **FM rebuilt to match the TX81Z:** the real TX81Z algorithms, waveforms and log-sine/volume ROMs, bit-exact against a reference; carrier levels now apply. All 128 TX81Z factory voices are in Bank T.
+- **Karplus-Strong rebuilt:** in tune, down to ~102 Hz, 3x sustain, a real body resonance, metallic excitation color, and a clean chorus.
+- **West Coast rebuilt:** in tune at low notes, 16-bit folding, bias and symmetry now distinct.
+- FM, KS and West Coast render at half rate (19.6 kHz) with interpolation, to fit the voicecard's CPU.
+
+**Breaking changes:** FM patches made on 2.x may sound different or be silent: carrier levels now matter (old default patches had op1 at level 20, which is now ~80 dB down), and algorithms 3, 4, 5 and 7 now use the real TX81Z routings. KS body/chorus/color and WC bias/symmetry changed meaning. Flash the controller and all voicecards together; settings reset to defaults on first boot.
 
 ---
 

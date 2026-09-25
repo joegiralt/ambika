@@ -62,7 +62,7 @@ static const prog_MultiData init_settings PROGMEM = {
   1, 42, 0,
   
   // Padding: [0]=EEPROM version marker, [1-3]=unused.
-  0x26, 0, 0, 0,
+  0x30, 0, 0, 0,
 };
 
 /* static */
@@ -75,7 +75,7 @@ void Multi::Init(bool force_reset) {
     InitSettings(INITIALIZATION_DEFAULT);
     Storage::WriteMultiToEeprom();
   } else {
-    if (!Storage::LoadMultiFromEeprom() || data_.padding2[0] != 0x26) {
+    if (!Storage::LoadMultiFromEeprom() || data_.padding2[0] != 0x30) {
       // EEPROM corrupt or from older firmware version — reset.
       InitSettings(INITIALIZATION_DEFAULT);
       Storage::WriteMultiToEeprom();
