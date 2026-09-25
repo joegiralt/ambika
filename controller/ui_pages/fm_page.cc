@@ -38,14 +38,9 @@ using namespace avrlib;
 /* static */
 uint8_t FmPage::page_index_;
 
-// TX81Z waveform short names.
+// TX81Z waveform names (W1 sine ... W8, see voicecard/fm4op.h).
 static const prog_char fm_wave_names[] PROGMEM =
-    "sin halfabs qtr habstri pls saw ";
-
-// Algorithm short descriptions.
-static const prog_char fm_alg_names[] PROGMEM =
-    "4>3>2>1 3+4>2>1 4>3+2>1 43 + 21"
-    "4>2+4311 4>1234>1+2+31+2+3+4";
+    "  W1  W2  W3  W4  W5  W6  W7  W8";
 
 // FM page 1: algorithm, feedback, ops 1-2
 // FM page 2: ops 3-4, levels 1-4

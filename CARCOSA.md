@@ -41,8 +41,8 @@ TX81Z-style frequency modulation with 4 operators.
 |------|-------|-------|-------------|
 | 1 | algo | 1-8 | Algorithm (operator routing topology) |
 | 2 | fbk | 0-127 | Feedback on operator 4 |
-| 3 | wav1 | sin-saw | Operator 1 waveform (8 TX81Z waveforms) |
-| 4 | wav2 | sin-saw | Operator 2 waveform |
+| 3 | wav1 | W1-W8 | Operator 1 waveform (8 TX81Z waveforms) |
+| 4 | wav2 | W1-W8 | Operator 2 waveform |
 | 5 | rat1 | 0.5-127 | Operator 1 frequency ratio |
 | 6 | fin1 | -64/+63 | Operator 1 fine detune |
 | 7 | rat2 | 0.5-127 | Operator 2 frequency ratio |
@@ -52,8 +52,8 @@ TX81Z-style frequency modulation with 4 operators.
 
 | Knob | Label | Range | Description |
 |------|-------|-------|-------------|
-| 1 | wav3 | sin-saw | Operator 3 waveform |
-| 2 | wav4 | sin-saw | Operator 4 waveform |
+| 1 | wav3 | W1-W8 | Operator 3 waveform |
+| 2 | wav4 | W1-W8 | Operator 4 waveform |
 | 3 | lvl1 | 0-127 | Operator 1 output level |
 | 4 | lvl2 | 0-127 | Operator 2 output level |
 | 5 | rat3 | 0.5-127 | Operator 3 frequency ratio |
@@ -74,13 +74,17 @@ TX81Z-style frequency modulation with 4 operators.
 8: 1+2+3+4           All carriers (additive)
 ```
 
-**Operator waveforms:** sin, half, abs, qtr, habs, tri, pls, saw
+**Operator waveforms:** the 8 TX81Z waves. W1 sine, W2 sin² (peakier sine), W3/W4 = first half of W1/W2 then silence, W5/W6 = W1/W2 at double speed in the first half then silence, W7/W8 = two positive W1/W2 humps in the first half then silence.
 
-**Modulation depth:** Operator levels use a TX81Z-style exponential curve (0.75 dB/step). Level 0 = silence, 64 = barely audible, 100 = moderate, 127 = full. The curve is steep above ~90 — start with low values (10-30) and bring up gradually. Per-operator envelopes (env 4-7) multiply the level after the exponential curve, matching the TX81Z signal chain.
+**Levels and modulation depth:** Operator levels work like the TX81Z: 0.75 dB per step, 127 = full, 0 = off (64 is about -47 dB). Carrier levels set each carrier's volume; modulator levels set modulation depth, up to ±4 cycles of phase at 127 like the TX81Z. Per-operator envelopes (env 4-7) add to the level's attenuation. When several carriers sum past full scale they clip, as on the TX81Z, so lower carrier levels in algorithms 4-8.
 
-**Feedback:** 16-bit internal state creates evolving, non-repeating oscillation (similar to the TX81Z's 14-bit feedback dynamics). Higher values add saw-like harmonics to operator 4.
+**Feedback:** operator 4 feeds back on itself. The knob is exponential like the TX81Z's FB 1-7: every 16 steps doubles the amount, and 112 equals FB 7.
 
-The mod matrix shows FM-specific destination names when in FM mode: `algo`, `lvl1`-`lvl4`, `rat3`, `fin3`, etc. Route envelopes/LFOs to operator levels for dynamic FM timbres.
+**TX81Z accuracy:** the operator path (algorithms, waveforms, log-sine and volume ROMs, modulation depth, feedback) matches the TX81Z sample for sample. FM renders at half the sample rate (19.6 kHz) so four operators fit in the voicecard's CPU time. Differences from a real TX81Z: ADSR envelopes instead of its rate-based ones, no fixed-frequency operators, and no keyboard scaling or per-operator velocity.
+
+**Factory voices:** Bank T holds all 128 TX81Z factory voices (A01-D32 as slots 0-127), converted from the TX81Z ROM by `make_patches.py`. Bank C's FM presets are TX81Z voices too: LatelyBass, ElectroPno, Full Brass, Xylophone, SynString and 16 8 4 2 F. Converted voices use a hidden transpose byte (the TX81Z's TRPS), which the FM page doesn't show yet.
+
+The mod matrix shows FM-specific destination names when in FM mode: `algo`, `lvl1`-`lvl4`, `rat3`, `rat4`. Route envelopes/LFOs to operator levels for dynamic FM timbres.
 
 #### Karplus-Strong (pluck)
 

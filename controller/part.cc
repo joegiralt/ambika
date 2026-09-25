@@ -41,8 +41,8 @@ static const prog_Patch init_patch PROGMEM = {
   WAVEFORM_SAW, 1, 4, 0,     // osc0: shape=SAW(fallback), param=algo1, range=R_100, det=0
   0, 0, 4, 0,                // osc1: wav1|wav2=0(sine), wav3|wav4=0, range=R_100, det=0
 
-  // Mixer (FM mode: ratios, levels)
-  4, 0, 4, 0, 20, 10, 10, 1,
+  // Mixer (FM mode: ratios, levels). op1 full, modulators off: a sine.
+  4, 0, 4, 0, 127, 0, 0, 0,
 
   // Filter
   96, 0, 0, 0, 0, 0, 24, 0,

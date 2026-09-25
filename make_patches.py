@@ -22,38 +22,12 @@ WAVEFORM_WAVESHAPE = 9
 WAVEFORM_WESTCOAST = 10
 
 # FM waveforms (TX81Z W1-W8)
-FM_WAVE_SINE = 0
-FM_WAVE_HALF_SINE = 1
-FM_WAVE_ABS_SINE = 2
-FM_WAVE_QUARTER_SINE = 3
-FM_WAVE_HALF_ABS = 4
-FM_WAVE_TRIPLE_ABS = 5
-FM_WAVE_PULSE_SINE = 6
-FM_WAVE_SAW_SINE = 7
-
-# TX81Z coarse frequency ratio indices (index into ratio table)
-R_050 = 0   # 0.50x
-R_071 = 1   # 0.71x (√2/2)
-R_078 = 2   # 0.78x
-R_087 = 3   # 0.87x
-R_100 = 4   # 1.00x
-R_141 = 5   # 1.41x (√2)
-R_157 = 6   # 1.57x (π/2)
-R_173 = 7   # 1.73x (√3)
-R_200 = 8   # 2.00x
-R_282 = 9   # 2.82x
-R_300 = 10  # 3.00x
-R_314 = 11  # 3.14x (π)
-R_400 = 13  # 4.00x
-R_500 = 16  # 5.00x
-R_600 = 19  # 6.00x
-R_700 = 22  # 7.00x
-R_800 = 25  # 8.00x
 
 # Mod sources (Carcosa v2.0)
 MOD_SRC_ENV_1 = 0
 MOD_SRC_ENV_2 = 1
 MOD_SRC_ENV_3 = 2
+MOD_SRC_LFO_4 = 10
 MOD_SRC_VELOCITY = 16
 MOD_SRC_PITCH_BEND = 18
 MOD_SRC_WHEEL = 19
@@ -61,6 +35,7 @@ MOD_SRC_WHEEL = 19
 # Mod destinations
 MOD_DST_PARAMETER_1 = 0
 MOD_DST_OSC_1_2_COARSE = 4
+MOD_DST_OSC_1_2_FINE = 5
 MOD_DST_FILTER_CUTOFF = 12
 MOD_DST_VCA = 18
 
@@ -83,31 +58,6 @@ ENGINE_WESTCOAST = 3
 def set_engine(patch, engine):
     """Set the synthesis engine type at padding[2] (offset 106)."""
     patch[106] = engine
-
-
-def set_fm(patch, algo, feedback=0,
-           wav1=0, wav2=0, wav3=0, wav4=0,
-           rat1=R_100, rat2=R_100, rat3=R_100, rat4=R_100,
-           fin1=0, fin2=0, fin3=0, fin4=0,
-           lvl1=127, lvl2=127, lvl3=127, lvl4=127):
-    """Set FM4OP parameters on a patch."""
-    patch[0] = WAVEFORM_SAW  # Safe fallback waveform; engine byte controls rendering
-    patch[1] = algo
-    patch[2] = rat1
-    patch[3] = fin1
-    patch[4] = wav1 | (wav2 << 4)
-    patch[5] = wav3 | (wav4 << 4)
-    patch[6] = rat2
-    patch[7] = fin2
-    patch[8] = rat3   # mix_balance
-    patch[9] = fin3   # mix_op
-    patch[10] = rat4  # mix_parameter
-    patch[11] = fin4  # mix_sub_osc_shape
-    patch[12] = lvl1  # mix_sub_osc
-    patch[13] = lvl2  # mix_noise
-    patch[14] = lvl3  # mix_fuzz
-    patch[15] = lvl4  # mix_crush
-    patch[104] = feedback  # padding[0]
 
 
 def set_filter(patch, cutoff=127, resonance=0, mode=0, env_amt=0, lfo_amt=0):
@@ -165,140 +115,166 @@ def save_patch(outdir, bank, slot, name, patch_data):
     print(f'  {bank}{slot:02d} - {name.strip()}')
 
 
-# --- FM Patches ---
+# --- FM Patches: TX81Z factory voices ---
+#
+# The TX81Z's 128 ROM voices (tx81z_factory.py) converted to the FM engine.
+# Algorithm, feedback, waveforms, ratios and levels map 1:1 onto the engine,
+# which matches the TX81Z's operator path. Envelopes, LFO and velocity are
+# approximated with Carcosa's ADSRs, voice LFO and VCA. Not supported:
+# fixed-frequency operators (they track pitch here), keyboard level/rate
+# scaling, per-operator velocity and LFO amplitude modulation.
 
-def fm_lately_bass():
-    # Engine type
+HERE = os.path.dirname(os.path.abspath(__file__))
+CONTROL_RATE = 20e6 / 510 / 40  # voicecard blocks per second
+
+
+def read_table(path, name):
+    """Numbers of a C table `name` in a firmware source file."""
+    import re
+    src = open(os.path.join(HERE, path)).read()
+    body = src[src.index(name):]
+    body = body[body.index('{') + 1:body.index('};')]
+    body = re.sub(r'//.*', '', body)
+    return [int(x) for x in re.findall(r'\d+', body)]
+
+
+TX81Z_RATIOS = [r / 256 for r in read_table('voicecard/voice.cc', 'tx81z_ratios_[]')]
+ENV_INCREMENTS = read_table('voicecard/resources.cc', 'lut_res_env_portamento_increments[]')
+LFO_INCREMENTS = read_table('voicecard/resources.cc', 'lut_res_lfo_increments[]')
+
+
+def nearest(values, target):
+    """Index of the value closest to target, in log terms."""
+    import math
+    return min(range(len(values)),
+               key=lambda i: abs(math.log(max(values[i], 1e-9) / target)))
+
+
+def env_value(seconds):
+    """Carcosa envelope stage value (0-127) lasting about `seconds`."""
+    stage = [65536 / inc / CONTROL_RATE for inc in ENV_INCREMENTS]
+    return nearest(stage, max(seconds, 1e-4))
+
+
+def eg_seconds(rate):
+    """Yamaha EG: time to fall 96 dB at effective rate 0-63 (about 6.7 ms at
+    the top, doubling every 4 steps)."""
+    return 0.0067 * 2 ** ((63 - min(rate, 63)) / 4)
+
+
+# Operators that reach the output, per algorithm (panel numbers).
+CARRIERS = [[1], [1], [1], [1], [1, 3], [1, 2, 3], [1, 2, 3], [1, 2, 3, 4]]
+# TX81Z LFO wave (saw up, square, triangle, S/H) -> Carcosa LFO shape.
+LFO_SHAPE = [3, 1, 0, 2]
+# TX81Z pitch modulation sensitivity 0-7, in cents at full depth.
+PMS_CENTS = [0, 5, 10, 20, 50, 100, 400, 700]
+
+
+def tx81z_to_patch(rom):
+    """Convert a 78-byte TX81Z ROM voice record to a Carcosa FM patch."""
+    import math
+    v = list(rom[:67]) + [99, 99, 99, 50, 50, 50] + list(rom[67:])
     p = make_patch()
     set_engine(p, ENGINE_FM4OP)
-    set_fm(p, algo=4, wav1=FM_WAVE_SINE, wav2=FM_WAVE_HALF_ABS,
-           wav3=FM_WAVE_SINE, wav4=FM_WAVE_SINE,
-           rat1=R_100, rat2=R_100, rat3=R_100, rat4=R_100,
-           lvl1=127, lvl2=110, lvl3=127, lvl4=101)
+    alg = v[40] & 7
+    p[1] = alg
+    p[104] = ((v[40] >> 3) & 7) * 16          # feedback: knob 16 per FB step
+    p[107] = (v[46] - 24) & 0xFF               # transpose (padding[3])
+
+    # Bulk-dump operator order is OP4, OP2, OP3, OP1.
+    offsets = {4: 0, 2: 10, 3: 20, 1: 30}
+    extras = {4: 73, 2: 75, 3: 77, 1: 79}
+    # Patch bytes per panel operator: (ratio, fine, level); waves are nibbles.
+    fields = {1: (2, 3, 12), 2: (6, 7, 13), 3: (8, 9, 14), 4: (10, 11, 15)}
+    releases = {}
+    for op in (1, 2, 3, 4):
+        o = v[offsets[op]:offsets[op] + 10]
+        ar, d1r, d2r, rr, d1l, out, crs = o[0], o[1], o[2], o[3], o[4], o[7], o[8]
+        det = o[9] & 7
+        fine = v[extras[op] + 1] & 15
+        wave = (v[extras[op] + 1] >> 4) & 7
+
+        ratio = TX81Z_RATIOS[crs] * (1 + fine / 16)
+        idx = nearest(TX81Z_RATIOS, ratio)
+        detune = round(256 * (ratio / TX81Z_RATIOS[idx] - 1)) + int((det - 3) / 2)
+        r_byte, f_byte, l_byte = fields[op]
+        p[r_byte] = idx
+        p[f_byte] = max(-64, min(63, detune)) & 0xFF
+        p[l_byte] = 0 if (out == 0 or ar == 0) else min(127, out + 28)
+        if op == 1:
+            p[4] = (p[4] & 0xF0) | wave
+        elif op == 2:
+            p[4] = (p[4] & 0x0F) | (wave << 4)
+        elif op == 3:
+            p[5] = (p[5] & 0xF0) | wave
+        else:
+            p[5] = (p[5] & 0x0F) | (wave << 4)
+
+        attack = 0 if ar >= 31 else env_value(eg_seconds(2 * ar) / 12)
+        drop_db = (15 - d1l) * 3
+        if d1r and drop_db:
+            decay = env_value(eg_seconds(2 * d1r) * drop_db / 96)
+            sustain = round(127 * 10 ** (-drop_db / 20))
+        elif d2r:
+            decay, sustain = env_value(eg_seconds(2 * d2r) / 2), 0
+        else:
+            decay, sustain = 0, 127
+        release = env_value(eg_seconds(4 * rr + 2) / 2)
+        releases[op] = release
+        set_env(p, 2 + op, attack=attack, decay=decay, sustain=sustain,
+                release=release)
+
+    # The carriers' envelopes shape the sound; the VCA just gates it.
+    carriers = CARRIERS[alg]
+    set_env(p, 1, attack=0, decay=0, sustain=127,
+            release=max(releases[op] for op in carriers))
     set_filter(p, cutoff=127)
-    set_env(p, 0, attack=0, decay=50, sustain=100, release=30)  # env1 (VCA)
-    set_env(p, 1, attack=0, decay=40, sustain=90, release=40)   # env2
-    set_env(p, 3, attack=0, decay=30, sustain=90, release=30)   # env4 = op1 (carrier, sustained)
-    set_env(p, 4, attack=0, decay=40, sustain=80, release=30)   # env5 = op2 (carrier, sustained)
-    set_env(p, 5, attack=0, decay=10, sustain=0, release=20)    # env6 = op3 (modulator, FAST decay)
-    set_env(p, 6, attack=0, decay=35, sustain=0, release=20)    # env7 = op4 (modulator, medium decay)
     set_mod(p, 0, MOD_SRC_ENV_2, MOD_DST_VCA, 63)
-    set_mod(p, 1, MOD_SRC_VELOCITY, MOD_DST_VCA, 20)
-    set_mod(p, 2, MOD_SRC_PITCH_BEND, MOD_DST_OSC_1_2_COARSE, 10)
+    kvs = max(v[offsets[op] + 6] & 7 for op in carriers)
+    set_mod(p, 1, MOD_SRC_VELOCITY, MOD_DST_VCA, kvs * 9)
+    set_mod(p, 2, MOD_SRC_PITCH_BEND, MOD_DST_OSC_1_2_COARSE, 32)
+
+    # Vibrato: voice LFO -> pitch.
+    cents = PMS_CENTS[(v[45] >> 4) & 7] * v[43] / 99
+    if cents >= 1:
+        hz = 0.06 * 2 ** (v[41] / 10)
+        lfo_hz = [inc * CONTROL_RATE / 65536 for inc in LFO_INCREMENTS]
+        p[48] = LFO_SHAPE[v[45] & 3]
+        p[49] = nearest(lfo_hz, hz)
+        if cents <= 50:
+            set_mod(p, 3, MOD_SRC_LFO_4, MOD_DST_OSC_1_2_FINE,
+                    min(63, round(63 * cents / 50)))
+        else:
+            set_mod(p, 3, MOD_SRC_LFO_4, MOD_DST_OSC_1_2_COARSE,
+                    min(63, round(63 * cents / 400)))
     return p
 
 
-def fm_epiano():
-    # Engine type
-    p = make_patch()
-    set_engine(p, ENGINE_FM4OP)
-    set_fm(p, algo=4, wav1=FM_WAVE_SINE, wav2=FM_WAVE_SINE,
-           wav3=FM_WAVE_SINE, wav4=FM_WAVE_SINE,
-           rat1=R_100, rat2=R_100, rat3=R_100, rat4=R_700,
-           lvl1=127, lvl2=127, lvl3=90, lvl4=70)
-    set_filter(p, cutoff=110)
-    set_env(p, 0, attack=0, decay=60, sustain=60, release=40)
-    set_env(p, 1, attack=0, decay=50, sustain=0, release=30)
-    set_env(p, 3, attack=0, decay=70, sustain=50, release=40)   # op1 carrier
-    set_env(p, 4, attack=0, decay=65, sustain=45, release=35)   # op2 carrier
-    set_env(p, 5, attack=0, decay=15, sustain=0, release=10)    # op3 mod (bell attack)
-    set_env(p, 6, attack=0, decay=25, sustain=0, release=15)    # op4 mod (bright shimmer)
-    set_mod(p, 0, MOD_SRC_ENV_2, MOD_DST_VCA, 63)
-    set_mod(p, 1, MOD_SRC_VELOCITY, MOD_DST_VCA, 40)
-    return p
+def tx81z_voices():
+    """(slot, name, patch) for the 128 TX81Z factory voices."""
+    sys.path.insert(0, HERE)
+    import tx81z_factory
+    for slot, data in tx81z_factory.VOICES:
+        rom = bytes.fromhex(data)
+        yield slot, rom[57:67].decode('ascii'), tx81z_to_patch(rom)
 
 
-def fm_brass():
-    # Engine type
-    p = make_patch()
-    set_engine(p, ENGINE_FM4OP)
-    set_fm(p, algo=0, wav1=FM_WAVE_SINE, wav2=FM_WAVE_SINE,
-           wav3=FM_WAVE_SINE, wav4=FM_WAVE_SINE,
-           rat1=R_100, rat2=R_100, rat3=R_100, rat4=R_100,
-           lvl1=127, lvl2=100, lvl3=90, lvl4=85)
-    set_filter(p, cutoff=100, resonance=10)
-    set_env(p, 0, attack=15, decay=30, sustain=100, release=30)
-    set_env(p, 1, attack=10, decay=20, sustain=90, release=25)
-    set_env(p, 3, attack=15, decay=30, sustain=100, release=30)  # op1 slow attack
-    set_env(p, 4, attack=15, decay=30, sustain=90, release=30)   # op2
-    set_env(p, 5, attack=20, decay=40, sustain=70, release=25)   # op3 mod (slow build)
-    set_env(p, 6, attack=25, decay=50, sustain=60, release=20)   # op4 mod (slower build)
-    set_mod(p, 0, MOD_SRC_ENV_2, MOD_DST_VCA, 63)
-    set_mod(p, 1, MOD_SRC_VELOCITY, MOD_DST_VCA, 30)
-    set_mod(p, 2, MOD_SRC_PITCH_BEND, MOD_DST_OSC_1_2_COARSE, 12)
-    return p
-
-
-def fm_marimba():
-    # Engine type
-    p = make_patch()
-    set_engine(p, ENGINE_FM4OP)
-    set_fm(p, algo=4, wav1=FM_WAVE_SINE, wav2=FM_WAVE_SINE,
-           wav3=FM_WAVE_SINE, wav4=FM_WAVE_SINE,
-           rat1=R_100, rat2=R_400, rat3=R_300, rat4=R_700,
-           lvl1=127, lvl2=90, lvl3=100, lvl4=80)
-    set_filter(p, cutoff=120)
-    set_env(p, 0, attack=0, decay=40, sustain=0, release=20)
-    set_env(p, 1, attack=0, decay=35, sustain=0, release=15)
-    set_env(p, 3, attack=0, decay=40, sustain=0, release=20)    # op1 fast decay
-    set_env(p, 4, attack=0, decay=30, sustain=0, release=15)    # op2 faster
-    set_env(p, 5, attack=0, decay=5, sustain=0, release=5)      # op3 very fast
-    set_env(p, 6, attack=0, decay=8, sustain=0, release=5)      # op4 very fast
-    set_mod(p, 0, MOD_SRC_ENV_2, MOD_DST_VCA, 63)
-    set_mod(p, 1, MOD_SRC_VELOCITY, MOD_DST_VCA, 50)
-    return p
-
-
-def fm_strings():
-    # Engine type
-    p = make_patch()
-    set_engine(p, ENGINE_FM4OP)
-    set_fm(p, algo=7, wav1=FM_WAVE_SINE, wav2=FM_WAVE_SINE,
-           wav3=FM_WAVE_SINE, wav4=FM_WAVE_SINE,
-           rat1=R_100, rat2=R_200, rat3=R_300, rat4=R_100,
-           lvl1=127, lvl2=100, lvl3=80, lvl4=60)
-    set_filter(p, cutoff=90, resonance=5)
-    set_env(p, 0, attack=30, decay=20, sustain=110, release=40)
-    set_env(p, 1, attack=25, decay=20, sustain=100, release=35)
-    set_env(p, 3, attack=30, decay=20, sustain=110, release=40)
-    set_env(p, 4, attack=30, decay=20, sustain=100, release=35)
-    set_env(p, 5, attack=35, decay=30, sustain=80, release=30)
-    set_env(p, 6, attack=20, decay=25, sustain=50, release=25)
-    set_mod(p, 0, MOD_SRC_ENV_2, MOD_DST_VCA, 63)
-    set_mod(p, 1, MOD_SRC_WHEEL, MOD_DST_PARAMETER_1, 20)
-    return p
-
-
-def fm_organ():
-    # Engine type
-    p = make_patch()
-    set_engine(p, ENGINE_FM4OP)
-    set_fm(p, algo=7, wav1=FM_WAVE_SINE, wav2=FM_WAVE_SINE,
-           wav3=FM_WAVE_SINE, wav4=FM_WAVE_SINE,
-           rat1=R_050, rat2=R_100, rat3=R_200, rat4=R_100,
-           lvl1=127, lvl2=127, lvl3=100, lvl4=40,
-           feedback=3)
-    set_filter(p, cutoff=127)
-    set_env(p, 0, attack=0, decay=0, sustain=127, release=10)
-    set_env(p, 1, attack=0, decay=0, sustain=127, release=10)
-    set_env(p, 3, attack=0, decay=0, sustain=127, release=10)
-    set_env(p, 4, attack=0, decay=0, sustain=127, release=10)
-    set_env(p, 5, attack=0, decay=0, sustain=127, release=10)
-    set_env(p, 6, attack=0, decay=0, sustain=127, release=10)
-    set_mod(p, 0, MOD_SRC_ENV_2, MOD_DST_VCA, 63)
-    return p
+# Bank C: TX81Z voices standing in for the classic FM sounds.
+BANK_C = ['C15', 'A11', 'B02', 'C27', 'B26', 'A18']
 
 
 def main():
     outdir = sys.argv[1] if len(sys.argv) > 1 else '.'
+    voices = {slot: (name, patch) for slot, name, patch in tx81z_voices()}
 
-    # FM patches — Bank C
-    save_patch(outdir, 'C', 1, 'FM LatelyBass ', fm_lately_bass())
-    save_patch(outdir, 'C', 2, 'FM E.Piano    ', fm_epiano())
-    save_patch(outdir, 'C', 3, 'FM Brass      ', fm_brass())
-    save_patch(outdir, 'C', 4, 'FM Marimba    ', fm_marimba())
-    save_patch(outdir, 'C', 5, 'FM Strings    ', fm_strings())
-    save_patch(outdir, 'C', 6, 'FM Organ      ', fm_organ())
+    # FM patches - Bank C
+    for i, slot in enumerate(BANK_C):
+        name, patch = voices[slot]
+        save_patch(outdir, 'C', i + 1, ('FM ' + name.strip()).ljust(14), patch)
+
+    # TX81Z factory voices A01-D32 - Bank T, slots 0-127
+    for i, (slot, (name, patch)) in enumerate(voices.items()):
+        save_patch(outdir, 'T', i, (slot + ' ' + name).ljust(14), patch)
 
 
 if __name__ == '__main__':

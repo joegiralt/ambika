@@ -262,10 +262,10 @@ void Parameter::PrintValue(uint8_t value, char* buffer, uint8_t width) const {
         "mix \0" "xmod\0" "nois\0" "sub \0" "fuzz\0" "crsh\0";
     static const prog_char dst_fm_short[] PROGMEM =
         "algo\0" "wave\0" "osc1\0" "osc2\0" "1+2 \0" "vibr\0"
-        "rat3\0" "fin3\0" "lvl2\0" "lvl1\0" "lvl3\0" "lvl4\0";
+        "rat3\0" "rat4\0" "lvl2\0" "lvl1\0" "lvl3\0" "lvl4\0";
     static const prog_char dst_ks_short[] PROGMEM =
         "damp\0" "colr\0" "ptch\0" "osc2\0" "1+2 \0" "vibr\0"
-        "body\0" "xmod\0" "stif\0" "emix\0" "feed\0" "sync\0";
+        "body\0" "edep\0" "stif\0" "emix\0" "feed\0" "sync\0";
     static const prog_char dst_wc_short[] PROGMEM =
         "fold\0" "sym \0" "ptch\0" "osc2\0" "1+2 \0" "vibr\0"
         "bias\0" "colr\0" "envf\0" "gain\0" "sub \0" "sync\0";
@@ -274,10 +274,10 @@ void Parameter::PrintValue(uint8_t value, char* buffer, uint8_t width) const {
         "mix   \0" "xmod  \0" "noise \0" "subosc\0" "fuzz  \0" "crush \0";
     static const prog_char dst_fm_long[] PROGMEM =
         "algo  \0" "waves \0" "osc 1 \0" "osc 2 \0" "osc1+2\0" "vibrat\0"
-        "rat 3 \0" "fine 3\0" "lvl 2 \0" "lvl 1 \0" "lvl 3 \0" "lvl 4 \0";
+        "rat 3 \0" "rat 4 \0" "lvl 2 \0" "lvl 1 \0" "lvl 3 \0" "lvl 4 \0";
     static const prog_char dst_ks_long[] PROGMEM =
         "dampin\0" "color \0" "pitch \0" "osc 2 \0" "osc1+2\0" "vibrat\0"
-        "body  \0" "xmod  \0" "stiff \0" "ensmix\0" "feedbk\0" "sync  \0";
+        "body  \0" "ensdep\0" "stiff \0" "ensmix\0" "feedbk\0" "sync  \0";
     static const prog_char dst_wc_long[] PROGMEM =
         "fold  \0" "symm  \0" "pitch \0" "osc 2 \0" "osc1+2\0" "vibrat\0"
         "bias  \0" "color \0" "env>fl\0" "gain  \0" "sub   \0" "sync  \0";
