@@ -179,6 +179,11 @@ static const prog_uint8_t default_most_recent_page_in_group[9] PROGMEM = {
   PAGE_SYSTEM_SETTINGS
 };
 
+// Page group 0 (the OSC button) shows one page per engine.
+static const uint8_t engine_pages[ENGINE_LAST] PROGMEM = {
+  PAGE_OSCILLATORS, PAGE_FM4OP, PAGE_KS_PLUCK, PAGE_WESTCOAST
+};
+
 /* <static> */
 UiPageNumber Ui::active_page_;
 UiPageNumber Ui::most_recent_non_system_page_;
@@ -341,11 +346,6 @@ void Ui::DoEvents() {
             // Mode select: cycle engine type via padding[2].
             // Each engine gets its own slot for the shared patch bytes
             // (offsets 0-15, 104) so switching engines preserves state.
-            static const uint8_t pages[] PROGMEM = {
-              PAGE_OSCILLATORS, PAGE_FM4OP,
-              PAGE_KS_PLUCK, PAGE_WESTCOAST
-            };
-
             // Shared byte offsets: 0-15 plus 104 (feedback).
             static const uint8_t kSharedCount = 17;
             static const uint8_t shared_offsets[kSharedCount] PROGMEM = {
@@ -360,9 +360,9 @@ void Ui::DoEvents() {
               // ENGINE_CLASSIC: saw osc, centered mix, everything else 0.
               { WAVEFORM_SAW, 0, 0, 0, WAVEFORM_NONE, 0, 0, 0,
                 32, 0, 0, 0, 0, 0, 0, 0,  0 },
-              // ENGINE_FM4OP: algo 1, 1:1 ratios, gentle levels.
+              // ENGINE_FM4OP: 1:1 ratios, op1 full, modulators off.
               { WAVEFORM_SAW, 1, 4, 0, 0, 0, 4, 0,
-                4, 0, 4, 0, 20, 10, 10, 1,  0 },
+                4, 0, 4, 0, 127, 0, 0, 0,  0 },
               // ENGINE_KS_PLUCK: moderate damping, centered body/position.
               { 0, 40, 0, 0, 0, 64, 64, 64,
                 64, 0, 0, 0, 0, 0, 0, 0,  0 },
@@ -391,7 +391,7 @@ void Ui::DoEvents() {
 
             multi.mutable_part(state_.active_part)->TouchPatch();
             ShowPage(static_cast<UiPageNumber>(
-                pgm_read_byte(&pages[idx])));
+                pgm_read_byte(&engine_pages[idx])));
           } else {
             (*event_handlers_.OnIncrement)(e.value);
           }
@@ -442,6 +442,20 @@ void Ui::DoEvents() {
     multi.ClearFlag(FLAG_HAS_CHANGE);
   }
   
+  // The active part's engine can change under the OSC page (patch load, init,
+  // part switch, program change). Never let the classic osc/mixer pages edit
+  // an FM/KS/WC patch or vice versa: those bytes mean different things.
+  if (page_info_.group == 0) {
+    uint8_t engine = multi.part(state_.active_part).raw_patch_data()[106];
+    UiPageNumber page = static_cast<UiPageNumber>(engine < ENGINE_LAST ?
+        pgm_read_byte(&engine_pages[engine]) : PAGE_OSCILLATORS);
+    if (page == PAGE_OSCILLATORS ? active_page_ > PAGE_MIXER
+                                 : active_page_ != page) {
+      ShowPage(page);
+      redraw = 1;
+    }
+  }
+
   if (redraw) {
     display.Clear();
     // The status icon is displayed when there is blank space at the left/right
