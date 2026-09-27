@@ -1,4 +1,4 @@
-# Carcosa v3.0.1
+# Carcosa v3.1
 ## Custom firmware for the Ambika polysynth
 
 Carcosa replaces the stock Ambika firmware with a focused set of synthesis engines, expanded envelope capabilities, and a streamlined interface.
