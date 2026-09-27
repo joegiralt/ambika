@@ -719,6 +719,70 @@ static void TestOutputIsTwelveBits() {
         low_bits ? "used" : "never used");
 }
 
+// #28: slop detunes each note by up to +/-0.5 semitone at 127, as the manual
+// says (it used to reach a full semitone), and not at all at 0.
+static void TestSlopPitchRange() {
+  SetupFm();
+  double lo = 1e9, hi = -1e9;
+  patch()->padding[1] = 127;
+  for (int k = 0; k < 60; ++k) {
+    int n = Play(57, 40);
+    double cents = 1200 * log2(MeasureFrequency(n) / ExpectedFrequency(57));
+    lo = std::min(lo, cents);
+    hi = std::max(hi, cents);
+  }
+  CHECK(lo >= -52 && hi <= 52,
+        "slop 127 detunes %.0f..%.0f cents, want within +/-50", lo, hi);
+  CHECK(hi - lo > 50, "slop 127 barely detunes: %.0f..%.0f cents", lo, hi);
+  patch()->padding[1] = 0;
+  int n = Play(57, 40);
+  double cents = 1200 * log2(MeasureFrequency(n) / ExpectedFrequency(57));
+  CHECK(fabs(cents) < 3, "slop 0 still detunes by %.1f cents", cents);
+}
+
+// Blocks until the VCA envelope (env 2, decaying to 0) falls below half.
+static int VcaDecayBlocks() {
+  voice.ResetEngines();
+  voice.Trigger(69 << 7, 127, 0);
+  for (int b = 0; b < 4000; ++b) {
+    audio_buffer.size = 0;
+    voice.ProcessBlock();
+    if (b > 2 && voice.vca() < 128) return b;
+  }
+  return 4000;
+}
+
+// #29: slop varies envelope times per note. The offset used to be cast to
+// 8 bits before it was scaled, so it wrapped to -2..+1 steps at any slop.
+static void TestSlopVariesEnvelopes() {
+  SetupFm();
+  Patch* p = patch();
+  p->env_lfo[1].attack = 0;
+  p->env_lfo[1].decay = 60;
+  p->env_lfo[1].sustain = 0;
+  p->env_lfo[1].release = 0;
+  p->modulation[0].source = MOD_SRC_ENV_2;
+  p->modulation[0].destination = MOD_DST_VCA;
+  p->modulation[0].amount = 63;
+  p->padding[1] = 127;
+  int lo = 1 << 30, hi = 0;
+  for (int k = 0; k < 40; ++k) {
+    int t = VcaDecayBlocks();
+    lo = std::min(lo, t);
+    hi = std::max(hi, t);
+  }
+  CHECK(hi >= 2 * lo, "slop 127: decay times only %d..%d blocks", lo, hi);
+  p->padding[1] = 0;
+  VcaDecayBlocks();  // envelope times update a block late: let slop 0 settle
+  lo = 1 << 30; hi = 0;
+  for (int k = 0; k < 10; ++k) {
+    int t = VcaDecayBlocks();
+    lo = std::min(lo, t);
+    hi = std::max(hi, t);
+  }
+  CHECK(hi == lo, "slop 0: decay times vary %d..%d blocks", lo, hi);
+}
+
 int main() {
   TestSpecialEnginesDoNotCrush();
   TestOutputIsTwelveBits();
@@ -745,6 +809,8 @@ int main() {
   TestWcModMatrix();
   TestWcBiasAndSymmetryDiffer();
   TestWcBiasMovesTheFold();
+  TestSlopPitchRange();
+  TestSlopVariesEnvelopes();
   printf(failures ? "%d FAILED\n" : "all passed\n", failures);
   return failures != 0;
 }

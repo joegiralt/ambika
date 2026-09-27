@@ -279,7 +279,15 @@ The **slop** parameter on the part page (knob 3) adds per-note random variation 
 - **Low values (10-30)**: Subtle warmth, slight detuning between voices
 - **High values (60-127)**: Wobbly, unstable, heavily vintage
 
-Each note-on generates a fresh random pitch offset (gentle, up to ~0.5 semitone at max). Envelope attack, decay, and release also vary per voice with a stronger effect — at high slop values, each voice in a chord has noticeably different envelope timing.
+Each note-on generates a fresh random pitch offset, up to ±0.5 semitone at 127 (about ±12 cents at 30). Each note also gets a random offset on the attack, decay and release of envelopes 1-3, up to ±32 steps at 127, so at high slop each voice in a chord has noticeably different envelope timing.
+
+What that changes depends on the engine:
+
+- **Classic and Karplus-Strong:** pitch, and the timing of whatever envelopes 1-3 drive (the VCA on envelope 2 in the factory patches).
+- **FM:** pitch and the VCA timing. The operator envelopes (4-7) don't vary, so slop doesn't change an FM voice's timbre.
+- **West Coast:** pitch, the VCA, and envelope 1, the fold envelope, so the brightness of each pluck varies too.
+
+(Before 3.0 the pitch offset reached a full semitone, and the envelope offset was always tiny because of a bug.)
 
 ---
 
