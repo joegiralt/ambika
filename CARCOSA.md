@@ -1,4 +1,4 @@
-# Carcosa v3.0
+# Carcosa v3.01
 ## Custom firmware for the Ambika polysynth
 
 Carcosa replaces the stock Ambika firmware with a focused set of synthesis engines, expanded envelope capabilities, and a streamlined interface.
@@ -9,7 +9,7 @@ This manual covers what Carcosa adds or changes. Everything inherited from the A
 
 ### What's new in 3.0
 
-- **12-bit audio:** the engines now send the voicecard DAC all 12 bits instead of 8, removing the 8-bit hiss (about 24 dB less noise).
+- **12-bit audio:** FM, Karplus-Strong and West Coast now send the voicecard DAC all 12 bits instead of 8, removing the 8-bit hiss (about 24 dB less noise). The classic engine is still 8-bit, like the stock Ambika.
 - **FM rebuilt to match the TX81Z:** the real TX81Z algorithms, waveforms and log-sine/volume ROMs, bit-exact against a reference; carrier levels now apply. All 128 TX81Z factory voices are in Bank T.
 - **Karplus-Strong rebuilt:** in tune, down to ~102 Hz, 3x sustain, a real body resonance, metallic excitation color, and a clean chorus.
 - **West Coast rebuilt:** in tune at low notes, 16-bit folding, bias and symmetry now distinct.
@@ -43,7 +43,7 @@ In classic modes, both osc1 and osc2 are active. The mixer page controls balance
 
 Special modes take over the entire voice. The mixer page parameters are repurposed for that engine's controls. Each has a dedicated UI with 1-2 pages of parameters.
 
-FM, Karplus-Strong and West Coast render at half the sample rate (19.6 kHz) and are interpolated back up, so each fits in the voicecard's CPU time. All engines send the voicecard DAC full 12-bit samples.
+FM, Karplus-Strong and West Coast render at half the sample rate (19.6 kHz) and are interpolated back up, so each fits in the voicecard's CPU time. They send the voicecard DAC full 12-bit samples; the classic engine stays 8-bit (see Audio path).
 
 #### 4-Op FM (fm4op)
 
@@ -279,7 +279,15 @@ The **slop** parameter on the part page (knob 3) adds per-note random variation 
 - **Low values (10-30)**: Subtle warmth, slight detuning between voices
 - **High values (60-127)**: Wobbly, unstable, heavily vintage
 
-Each note-on generates a fresh random pitch offset (gentle, up to ~0.5 semitone at max). Envelope attack, decay, and release also vary per voice with a stronger effect — at high slop values, each voice in a chord has noticeably different envelope timing.
+Each note-on generates a fresh random pitch offset, up to ±0.5 semitone at 127 (about ±12 cents at 30). Each note also gets a random offset on the attack, decay and release of envelopes 1-3, up to ±32 steps at 127, so at high slop each voice in a chord has noticeably different envelope timing.
+
+What that changes depends on the engine:
+
+- **Classic and Karplus-Strong:** pitch, and the timing of whatever envelopes 1-3 drive (the VCA on envelope 2 in the factory patches).
+- **FM:** pitch and the VCA timing. The operator envelopes (4-7) don't vary, so slop doesn't change an FM voice's timbre.
+- **West Coast:** pitch, the VCA, and envelope 1, the fold envelope, so the brightness of each pluck varies too.
+
+(Before 3.0 the pitch offset reached a full semitone, and the envelope offset was always tiny because of a bug.)
 
 ---
 
@@ -340,7 +348,14 @@ Flash limits are what the bootloader leaves free. Sizes are for the v3.0 release
 
 ### Audio path
 
-Every engine sends the voicecard's 12-bit DAC full 12-bit samples (the original design used 8 of its 12 bits). The classic engine is still 8-bit internally and is scaled up. FM, KS and West Coast compute at 14-16 bits and render at 19.6 kHz, then are interpolated to the voicecard's 39.2 kHz. Every engine's per-block cost was measured in an AVR simulator; with every Karplus-Strong feature maxed at once (metallic color, body, chorus and stiffness), KS is the heaviest load on the voicecard.
+The voicecard's DAC takes 12 bits; the original design used only 8 of them. FM, KS and West Coast compute at 14-16 bits and send all 12. The classic engine is unchanged from the stock Ambika: it renders 8-bit samples at the full 39.2 kHz and shifts them up, so it keeps the 8-bit noise floor.
+
+FM, KS and West Coast render at 19.6 kHz and are interpolated to the voicecard's 39.2 kHz. That trade has two side effects:
+
+- **Aliasing:** anything the engine generates above 9.8 kHz (half of 19.6 kHz) folds back into the audible band. A 12 kHz FM sideband comes out near 7.6 kHz, and no filter afterwards can tell it apart from a real 7.6 kHz partial. Bright FM settings (high modulator levels, high ratios, heavy feedback) on high notes alias the most; lowering modulator levels reduces it at the source.
+- **Images:** the interpolation leaves weaker copies of the spectrum above 9.8 kHz. The analog filter does remove these, but only when its cutoff is below them. The factory patches leave the filter wide open, so closing it a little also cleans up the top end.
+
+The alternative, full-rate synthesis, only fits the CPU at 8 bits, and 8-bit output hisses at every rate. Aliases go through the analog filter like the rest of the sound, so opening the cutoff exposes more of the digital edge and closing it smooths it. Every engine's per-block cost was measured in an AVR simulator; with every Karplus-Strong feature maxed at once (metallic color, body, chorus and stiffness), KS is the heaviest load on the voicecard.
 
 ### Known Issues
 

@@ -745,8 +745,8 @@ void Voice::Trigger(uint16_t note, uint8_t velocity, uint8_t legato) {
   uint8_t slop = patch_.padding[1];
   if (slop > 0) {
     int8_t rnd = static_cast<int8_t>(Random::GetByte());
-    // Scale: slop=127 gives ±~64 units (about ±0.5 semitone).
-    int16_t offset = (static_cast<int16_t>(rnd) * slop) >> 7;
+    // Scale: slop=127 gives about +/-64 units (+/-0.5 semitone).
+    int16_t offset = (static_cast<int16_t>(rnd) * slop) >> 8;
     pitch_target_ += offset;
   }
 
@@ -951,9 +951,10 @@ inline void Voice::UpdateDestinations() {
   uint8_t slop = patch_.padding[1];
   int8_t env_slop = 0;
   if (slop > 0) {
+    // Scale first, then narrow: up to +/-32 steps at slop 127.
     env_slop = static_cast<int8_t>(
-        (static_cast<int16_t>(modulation_sources_[MOD_SRC_RANDOM]) - 128) *
-        slop) >> 6;
+        ((static_cast<int16_t>(modulation_sources_[MOD_SRC_RANDOM]) - 128) *
+         slop) >> 9);
   }
 
   for (int i = 0; i < kNumEnvLfoSlots; ++i) {
