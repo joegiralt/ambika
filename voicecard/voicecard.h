@@ -32,7 +32,7 @@ static const uint8_t kControlRate = 40;
 // The latency is 1ms, with a buffer storing 4ms of audio.
 static const uint8_t kAudioBlockSize = kControlRate;
 
-const uint8_t kSystemVersion = 0x30;
+const uint8_t kSystemVersion = 0x31;
 
 static uint8_t* kFirmwareUpdateFlagPtr = (uint8_t*)(E2END);
 
