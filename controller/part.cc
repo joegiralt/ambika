@@ -137,6 +137,36 @@ void Part::TouchPatch() {
       }
     }
   }
+
+  // Every patch load funnels through here, so this is where bytes that end up
+  // as array indices get clamped. They are plain padding in stock patches and
+  // can hold anything when a bank, a sysex dump or a corrupt card supplies
+  // them, and nothing downstream range checks them.
+
+  // Engine selector: indexes engine_state[ENGINE_LAST][17] in the UI and
+  // picks the page in Ui::DoEvents.
+  if (patch_.padding[2] >= ENGINE_LAST) {
+    patch_.padding[2] = ENGINE_CLASSIC;
+  }
+
+  // FM feedback: the voicecard computes 7 - (byte >> 4) as a shift count, so a
+  // high nibble above 7 shifts by a negative amount.
+  if (patch_.padding[0] > 127) {
+    patch_.padding[0] = 0;
+  }
+
+  // The voicecard indexes modulation_sources_[source] and dst_[destination]
+  // with these directly, every control block. A slot naming something that
+  // does not exist cannot do anything useful, so make it inert instead of
+  // guessing at a substitute destination.
+  for (uint8_t i = 0; i < kNumModulations; ++i) {
+    if (patch_.modulation[i].source >= MOD_SRC_LAST ||
+        patch_.modulation[i].destination >= MOD_DST_LAST) {
+      patch_.modulation[i].source = 0;
+      patch_.modulation[i].destination = 0;
+      patch_.modulation[i].amount = 0;
+    }
+  }
   flags_ = FLAG_HAS_CHANGE;
   // Send an "enter block write" command to all voicecards.
   for (uint8_t i = 0; i < num_allocated_voices_; ++i) {

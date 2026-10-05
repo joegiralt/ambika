@@ -1,4 +1,4 @@
-# Carcosa v3.02
+# Carcosa v3.03
 ## Custom firmware for the Ambika polysynth
 
 Carcosa replaces the stock Ambika firmware with a focused set of synthesis engines, expanded envelope capabilities, and a streamlined interface.
@@ -372,7 +372,7 @@ The alternative, full-rate synthesis, only fits the CPU at 8 bits, and 8-bit out
 
 **Added:** TX81Z-accurate 4-op FM with the 128 TX81Z factory voices, Karplus-Strong, west coast wavefolder, waveshaping, looping envelopes, analog slop, smart randomizer, dedicated UI pages for special modes, per-engine mod destination names, per-engine state isolation, EEPROM auto-reset, extended octave range (-4/+4), 12-bit audio output.
 
-**Bug fixes:** filter page scroll reset (scrolling past the last control called a NULL handler and restarted the firmware), MIDI channel display (showed garbage for channels 1-16), engine switch parameter bleed, voicecard frame drops on engine switch, boot page routing, note stack uninitialized variables, transient generator off-by-one, SPI bulk write bounds check, page group initialization size. For the 3.0 fixes, see the [v3.0 release notes](https://github.com/joegiralt/ambika/releases/tag/v3.0).
+**Bug fixes:** shifted-button page jump out of bounds, unvalidated patch bytes used as array indices (engine selector, FM feedback, modulation matrix), filter page scroll reset (scrolling past the last control called a NULL handler and restarted the firmware), MIDI channel display (showed garbage for channels 1-16), engine switch parameter bleed, voicecard frame drops on engine switch, boot page routing, note stack uninitialized variables, transient generator off-by-one, SPI bulk write bounds check, page group initialization size. For the 3.0 fixes, see the [v3.0 release notes](https://github.com/joegiralt/ambika/releases/tag/v3.0).
 
 ### Patch Compatibility
 

@@ -219,7 +219,9 @@ class Ui {
   
   static uint8_t active_group_;
   static uint8_t s1_held_;
-  static UiPageNumber most_recent_page_in_group_[9];
+  // One entry per page group (the eight unshifted buttons, plus group 8).
+  static const uint8_t kNumPageGroups = 9;
+  static UiPageNumber most_recent_page_in_group_[kNumPageGroups];
   static EventHandlers event_handlers_;
   static PageInfo page_info_;
 

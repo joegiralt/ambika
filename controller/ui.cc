@@ -379,7 +379,13 @@ void Ui::DoEvents() {
 
             uint8_t* patch = multi.mutable_part(
                 state_.active_part)->mutable_raw_patch_data();
+            // The engine byte is only padding in stock patches, so it can
+            // hold anything. idx is clamped below, but prev indexes
+            // engine_state[ENGINE_LAST][17] on the save loop.
             uint8_t prev = patch[106];  // current engine
+            if (prev >= ENGINE_LAST) {
+              prev = ENGINE_CLASSIC;
+            }
             int8_t idx = prev;
             idx += (static_cast<int8_t>(e.value) > 0) ? 1 : -1;
             if (idx < 0) idx = ENGINE_LAST - 1;
@@ -422,10 +428,16 @@ void Ui::DoEvents() {
         // Any other button exits mode select.
         s1_held_ = 0;
         if (!(*event_handlers_.OnKey)(e.control_id)) {
-          if (page_info_.group == e.control_id) {
-            ShowPage(page_info_.next_page);
-          } else {
-            ShowPage(most_recent_page_in_group_[e.control_id]);
+          // Only the eight unshifted buttons pick a page group. A shifted
+          // switch is 8..15 (SWITCH_SHIFT_1..8) and reaches this point on the
+          // pages whose OnKey returns 0 for it, where it would read past the
+          // group array and hand ShowPage a byte of neighbouring SRAM.
+          if (e.control_id < kNumPageGroups) {
+            if (page_info_.group == e.control_id) {
+              ShowPage(page_info_.next_page);
+            } else {
+              ShowPage(most_recent_page_in_group_[e.control_id]);
+            }
           }
         }
         break;
