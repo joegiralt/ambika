@@ -312,11 +312,17 @@ void Ui::ShowPageRelative(int8_t increment) {
     current_page = 0;
   }
   ShowPage(static_cast<UiPageNumber>(current_page));
-  // Jump to the last control when scrolling backwards.
-  if (increment >= 0) {
-    (*event_handlers_.SetActiveControl)(ACTIVE_CONTROL_FIRST);
-  } else {
-    (*event_handlers_.SetActiveControl)(ACTIVE_CONTROL_LAST);
+  // The env/LFO, FM, KS and west coast pages track their own cursor and leave
+  // this handler NULL. Calling through it jumps to 0x0000, which restarts the
+  // firmware without resetting the voicecards: the synth goes silent until it
+  // is power cycled.
+  if (event_handlers_.SetActiveControl) {
+    // Jump to the last control when scrolling backwards.
+    if (increment >= 0) {
+      (*event_handlers_.SetActiveControl)(ACTIVE_CONTROL_FIRST);
+    } else {
+      (*event_handlers_.SetActiveControl)(ACTIVE_CONTROL_LAST);
+    }
   }
 }
 
@@ -552,7 +558,10 @@ void Ui::CloseDialogBox(uint8_t return_value) {
   // Return to the page that was active when the dialog was shown.
   uint8_t returning_from = page_info_.index;
   ShowPage(active_page_, 0);
-  (*event_handlers_.OnDialogClosed)(returning_from, return_value);
+  // Optional, like SetActiveControl above.
+  if (event_handlers_.OnDialogClosed) {
+    (*event_handlers_.OnDialogClosed)(returning_from, return_value);
+  }
 }
 
 }  // namespace ambika
