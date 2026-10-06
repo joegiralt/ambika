@@ -1354,10 +1354,8 @@ void Voice::ProcessBlock() {
   // Post-mix processing.
   if (is_special) {
     // In FM4OP/KS mode, skip noise/fuzz post-processing.
-    // Write directly to audio buffer.
-    for (uint8_t i = 0; i < kAudioBlockSize; i += 2) {
-      audio_buffer.Overwrite2(render_.wide[i], render_.wide[i + 1]);
-    }
+    // Straight into the ring: the main loop checked there is room.
+    audio_buffer.WriteBlock(render_.wide, kAudioBlockSize);
   } else {
     uint8_t noise = Random::state_msb();
     uint8_t noise_gain = U15ShiftRight7(dst_[MOD_DST_MIX_NOISE]);

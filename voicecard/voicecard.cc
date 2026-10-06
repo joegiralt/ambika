@@ -42,8 +42,8 @@ PwmOutput<kPinVcaOut> vca_out;
 
 ParallelPort<PortC, PARALLEL_TRIPLE_LOW> vcf_mode;
 
-ISR(TIMER2_OVF_vect) {
-  AudioOutTick();
+ISR(TIMER2_OVF_vect, ISR_NAKED) {
+  AUDIO_ISR("");
 }
 
 // This GPIO is used during development for timing code.

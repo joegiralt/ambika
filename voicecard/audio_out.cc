@@ -22,6 +22,11 @@
 namespace ambika {
 
 /* extern */
-avrlib::RingBuffer<AudioBufferSpecs> audio_buffer;
+AudioRing audio_buffer;
+
+volatile uint8_t update_vca;
+volatile uint16_t vca_word;
+volatile uint8_t dac_crush;
+volatile uint8_t dac_sample_counter;
 
 }  // namespace ambika

@@ -32,15 +32,19 @@ PwmOutput<kPinVcfCutoffOut> vcf_cutoff_out;
 PwmOutput<kPinVcfResonanceOut> vcf_resonance_out;
 PwmOutput<kPinVcaOut> vca_out;
 ParallelPort<PortC, PARALLEL_TRIPLE_LOW> vcf_mode;
-volatile uint16_t isr_count = 0;
-volatile uint16_t underruns = 0;
+volatile uint16_t isr_count asm("bench_isr_count") = 0;
+volatile uint16_t underruns = 0;  // no longer counted
 
 // Timer1 CTC at 510 cycles stands in for the Timer2 overflow (simavr does not
 // fire the phase-correct overflow); same period as the real audio ISR.
-ISR(TIMER1_COMPA_vect) {
-  ++isr_count;
-  if (!audio_buffer.readable()) ++underruns;
-  AudioOutTick();
+ISR(TIMER1_COMPA_vect, ISR_NAKED) {
+  AUDIO_ISR(
+    "lds  r24, bench_isr_count   \n\t"
+    "subi r24, 0xff              \n\t"
+    "sts  bench_isr_count, r24   \n\t"
+    "lds  r24, bench_isr_count+1 \n\t"
+    "sbci r24, 0xff              \n\t"
+    "sts  bench_isr_count+1, r24 \n\t");
 }
 
 static const uint8_t kBlocks = 8;

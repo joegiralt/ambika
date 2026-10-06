@@ -18,7 +18,7 @@
 
 #include <avr/eeprom.h>
 
-#include "avrlib/ring_buffer.h"
+#include "voicecard/ring.h"
 #include "avrlib/spi.h"
 #include "avrlib/timer.h"
 #include "avrlib/watchdog_timer.h"
@@ -31,24 +31,21 @@
 
 namespace ambika {
 
-using avrlib::RingBuffer;
 
 enum State {
   EXPECTING_COMMAND,
   EXPECTING_ARGUMENTS,
 };
 
-struct InputBufferSpecs {
-  typedef uint8_t Value;
-  enum {
-    buffer_size = 256,
-    data_size = 8,
-  };
-};
-
 class VoicecardProtocolRx {
  public:
   VoicecardProtocolRx() { }
+
+  // Public: the assembly audio ISR (audio_out.h) fills the ring and sets the
+  // LED counter.
+  typedef Ring<uint8_t, 256> RxRing;
+  static RxRing buffer_;
+  static uint8_t rx_led_counter_;
   
   static void Init() {
     spi_.Init();
@@ -201,13 +198,11 @@ class VoicecardProtocolRx {
  private:
   static SpiSlave<MSB_FIRST, false> spi_;
 
-  static RingBuffer<InputBufferSpecs> buffer_;
   static uint8_t command_;
   static uint8_t state_;
   static uint8_t data_size_;
   static uint8_t* data_ptr_;
   static uint8_t arguments_[3];
-  static uint8_t rx_led_counter_;
   static uint8_t lights_out_;
    
   DISALLOW_COPY_AND_ASSIGN(VoicecardProtocolRx);

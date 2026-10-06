@@ -11,6 +11,9 @@ struct CaptureBuffer {
   uint16_t data[kAudioBlockSize];
   uint8_t size;
   void Overwrite2(uint16_t a, uint16_t b) { data[size++] = a; data[size++] = b; }
+  void WriteBlock(const uint16_t* src, uint8_t n) {
+    for (uint8_t i = 0; i < n; ++i) data[size++] = src[i];
+  }
 };
 extern CaptureBuffer audio_buffer;
 
