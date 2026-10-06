@@ -72,6 +72,22 @@ WestCoast Voice::westcoast_;
 uint8_t Voice::last_engine_ = 0xFF;
 
 // TX81Z frequency ratios as 8.8 fixed-point (ratio × 256).
+#ifdef __AVR__
+// Operator routing per algorithm (see Fm4Op::Sample): for ops 1-3 the mask
+// of outputs feeding its phase (bit j = op j+1), then the carrier mask.
+const prog_uint8_t Fm4Op::routing_[8][4] PROGMEM = {
+  { 0x02, 0x04, 0x08, 0x01 },  // 1: 4->3->2->1
+  { 0x02, 0x0C, 0x00, 0x01 },  // 2: (4+3)->2->1
+  { 0x0A, 0x04, 0x00, 0x01 },  // 3: (4+(3->2))->1
+  { 0x06, 0x00, 0x08, 0x01 },  // 4: ((4->3)+2)->1
+  { 0x02, 0x00, 0x08, 0x05 },  // 5: (4->3)+(2->1)
+  { 0x08, 0x08, 0x08, 0x07 },  // 6: 4->(1+2+3)
+  { 0x00, 0x00, 0x08, 0x07 },  // 7: (4->3)+2+1
+  { 0x00, 0x00, 0x00, 0x0F },  // 8: 1+2+3+4
+};
+FmRenderParams Fm4Op::params_;
+#endif
+
 const prog_uint16_t Fm4Op::tx81z_ratios_[] PROGMEM = {
   128,  182,  200,  223,  256,  361,  402,  443,
   512,  722,  768,  804,  886, 1024, 1085, 1206,

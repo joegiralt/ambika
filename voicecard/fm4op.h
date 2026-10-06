@@ -26,6 +26,8 @@ using namespace avrlib;
 
 namespace ambika {
 
+struct FmRenderParams;
+
 // 16-bit sine table (512 entries + 1 wrap), defined in voice.cc.
 extern const prog_uint16_t wav_res_sine16[] PROGMEM;
 
@@ -303,7 +305,24 @@ class Fm4Op {
   }
 
   // Render a block of 12-bit DAC samples (centered on 2048).
+  // RenderC is the reference; on the AVR, RenderAsm does the same work with
+  // the phases in registers and the operators inlined (about 60% of the
+  // cycles). bench/ with BENCH_FMTEST checks they agree sample for sample.
   void Render(
+      uint8_t algorithm,
+      const uint8_t* w,
+      const uint16_t* att,
+      uint16_t feedback_gain,
+      uint16_t* buffer,
+      uint8_t size) {
+#ifdef __AVR__
+    RenderAsm(algorithm, w, att, feedback_gain, buffer, size);
+#else
+    RenderC(algorithm, w, att, feedback_gain, buffer, size);
+#endif
+  }
+
+  void RenderC(
       uint8_t algorithm,
       const uint8_t* w,
       const uint16_t* att,
@@ -324,6 +343,22 @@ class Fm4Op {
       *buffer++ = out + 2048;
     }
   }
+
+#ifdef __AVR__
+  void RenderAsm(
+      uint8_t algorithm,
+      const uint8_t* w,
+      const uint16_t* att,
+      uint16_t feedback_gain,
+      uint16_t* buffer,
+      uint8_t size);
+  // Routing per algorithm: for operators 1-3, a bit mask of which operator
+  // outputs (bit j = op j+1) feed its phase; then the carriers. Op 4 has
+  // the feedback only. Same routing as the switch in Sample().
+  static const prog_uint8_t routing_[8][4] PROGMEM;
+  // Static so RenderAsm has no stack frame: the loop owns Y.
+  static struct FmRenderParams params_;
+#endif
 
   // TX81Z frequency ratio table — 64 entries, 8.8 fixed-point.
   // Coarse ratio byte (0-63) indexes into this table.
@@ -437,6 +472,546 @@ inline int16_t Fm4Op::Operator(
       [ls] "i" (log_sin_), [ex] "i" (exp_)
     : "r30", "r31", "cc");
   return static_cast<int16_t>(v);
+}
+#endif  // __AVR__
+
+
+#ifdef __AVR__
+// Everything the loop needs, addressed from Y with ldd. Offsets are the
+// numbers in the assembly.
+struct FmRenderParams {
+  uint16_t att[4];       // 0
+  uint8_t w[4];          // 8
+  uint8_t mod_mask[4];   // 12  (index 3 unused: op 4 has only feedback)
+  uint8_t carriers;      // 16
+  uint16_t feedback_gain;  // 17
+  int16_t fb[2];         // 19  feedback_[0], feedback_[1]
+  int16_t out[4];        // 23  operator outputs, this sample
+  uint8_t count;         // 31
+  FmOperator* op;        // 32  the four phases (written back at the end)
+  uint32_t inc[4];       // 34  phase increments, op 1 first
+};
+
+// Register use inside the loop:
+//   r2-r5 phase of op 1, r6-r9 op 2, r10-r13 op 3, r14-r17 op 4 (low first)
+//   r18:r19 operator result       r20 scratch       r21 waveform
+//   r22:r23 attenuation           r24:r25 phase in / sum
+//   X = output buffer, Y = params, Z = tables, op_ while adding increments
+// The operator is the same algorithm as OperatorC in fixed registers,
+// written out once per operator (no call), with a short path for W1. Its
+// result is also stored to out[] for the operators it feeds.
+inline __attribute__((noinline)) void Fm4Op::RenderAsm(
+    uint8_t algorithm,
+    const uint8_t* w,
+    const uint16_t* att,
+    uint16_t feedback_gain,
+    uint16_t* buffer,
+    uint8_t size) {
+  FmRenderParams& params = params_;
+  for (uint8_t i = 0; i < 4; ++i) {
+    params.att[i] = att[i];
+    params.w[i] = w[i];
+    params.mod_mask[i] = pgm_read_byte(&routing_[algorithm][i]);
+  }
+  params.carriers = params.mod_mask[3];
+  params.feedback_gain = feedback_gain;
+  params.fb[0] = feedback_[0];
+  params.fb[1] = feedback_[1];
+  params.count = size;
+  params.op = op_;
+  for (uint8_t i = 0; i < 4; ++i) {
+    params.inc[i] = op_[i].phase_increment;
+  }
+  // Y is gcc's frame pointer here, so it is saved and restored by hand
+  // rather than declared clobbered.
+  // Y is gcc's frame pointer here, so it is saved and restored by hand
+  // rather than declared clobbered.
+  asm volatile(
+    "push r28                 \n\t"
+    "push r29                 \n\t"
+    "ldi  r28, lo8(%[pp])     \n\t"
+    "ldi  r29, hi8(%[pp])     \n\t"
+    "ldd  r30, Y+32           \n\t"
+    "ldd  r31, Y+33           \n\t"
+    /* phases into r2..r17 */
+    "ld   r2, Z+              \n\t" "ld   r3, Z+              \n\t"
+    "ld   r4, Z+              \n\t" "ld   r5, Z+              \n\t"
+    "adiw r30, 4              \n\t"
+    "ld   r6, Z+              \n\t" "ld   r7, Z+              \n\t"
+    "ld   r8, Z+              \n\t" "ld   r9, Z+              \n\t"
+    "adiw r30, 4              \n\t"
+    "ld   r10, Z+             \n\t" "ld   r11, Z+             \n\t"
+    "ld   r12, Z+             \n\t" "ld   r13, Z+             \n\t"
+    "adiw r30, 4              \n\t"
+    "ld   r14, Z+             \n\t" "ld   r15, Z+             \n\t"
+    "ld   r16, Z+             \n\t" "ld   r17, Z+             \n\t"
+
+    /* ---- per sample ---- */
+    "10:                      \n\t"
+    /* op 4: input = ((fb0 + fb1) * gain) >> 16, or 0 */
+    "clr  r24                 \n\t"
+    "clr  r25                 \n\t"
+    "ldd  r22, Y+17           \n\t"
+    "ldd  r23, Y+18           \n\t"
+    "movw r18, r22            \n\t"
+    "or   r18, r19            \n\t"
+    "breq 11f                 \n\t"
+    "ldd  r18, Y+19           \n\t"
+    "ldd  r19, Y+20           \n\t"
+    "ldd  r20, Y+21           \n\t"
+    "ldd  r21, Y+22           \n\t"
+    "add  r18, r20            \n\t"
+    "adc  r19, r21            \n\t"   /* s = fb0 + fb1 in r18:r19, gain r22:r23 */
+    "mul  r18, r22            \n\t"   /* 32-bit product: r20 r21 r24 r25 */
+    "movw r20, r0             \n\t"
+    "mul  r18, r23            \n\t"
+    "add  r21, r0             \n\t"
+    "adc  r24, r1             \n\t"
+    "brcc .+2                 \n\t"
+    "inc  r25                 \n\t"
+    "mulsu r19, r22           \n\t"   /* signed high byte of s x low byte of gain */
+    "brcc .+2                 \n\t"
+    "dec  r25                 \n\t"
+    "add  r21, r0             \n\t"
+    "adc  r24, r1             \n\t"
+    "brcc .+2                 \n\t"
+    "inc  r25                 \n\t"
+    "mulsu r19, r23           \n\t"
+    "add  r24, r0             \n\t"
+    "adc  r25, r1             \n\t"   /* r24:r25 = product >> 16 */
+    "11:                      \n\t"
+    "ldd  r18, Y+46           \n\t" "add  r14, r18            \n\t"
+    "ldd  r18, Y+47           \n\t" "adc  r15, r18            \n\t"
+    "ldd  r18, Y+48           \n\t" "adc  r16, r18            \n\t"
+    "ldd  r18, Y+49           \n\t" "adc  r17, r18            \n\t"
+    "add  r24, r16            \n\t"
+    "adc  r25, r17            \n\t"
+    "ldd  r21, Y+11           \n\t"
+    "ldd  r22, Y+6            \n\t"
+    "ldd  r23, Y+7            \n\t"
+    "tst  r21                 \n\t"   /* W1 is the common case: no wave tests */
+    "brne 21f                 \n\t"
+    "movw r30, r24            \n\t"
+    "mov  r20, r31            \n\t"
+    "sbrc r31, 0              \n\t"
+    "com  r30                 \n\t"
+    "rjmp 25f                 \n\t"
+    "21: mov  r20, r21        \n\t"
+    "andi r20, 6              \n\t"
+    "breq 22f                 \n\t"
+    "sbrc r25, 1              \n\t"
+    "rjmp 29f                 \n\t"
+    "22: movw r30, r24        \n\t"
+    "sbrs r21, 2              \n\t"
+    "rjmp 23f                 \n\t"
+    "lsl  r30                 \n\t"
+    "rol  r31                 \n\t"
+    "sbrc r21, 1              \n\t"
+    "andi r31, 1              \n\t"
+    "23: mov  r20, r31        \n\t"
+    "sbrc r31, 0              \n\t"
+    "com  r30                 \n\t"
+    "25: ldi  r31, 0          \n\t"   /* a = log_sin_[quarter] */
+    "lsl  r30                 \n\t"
+    "rol  r31                 \n\t"
+    "subi r30, lo8(-(%[ls]))  \n\t"
+    "sbci r31, hi8(-(%[ls]))  \n\t"
+    "lpm  r18, Z+             \n\t"
+    "lpm  r19, Z              \n\t"
+    "sbrs r21, 0              \n\t"
+    "rjmp 24f                 \n\t"
+    "lsl  r18                 \n\t"   /* W2: a <<= 1, capped at kZero */
+    "rol  r19                 \n\t"
+    "ldi  r30, 0x08           \n\t"
+    "cpi  r18, 0x5A           \n\t"
+    "cpc  r19, r30            \n\t"
+    "brlo 24f                 \n\t"
+    "ldi  r18, 0x59           \n\t"
+    "ldi  r19, 0x08           \n\t"
+    "24: add  r18, r22        \n\t"   /* a += attenuation */
+    "adc  r19, r23            \n\t"
+    "rjmp 26f                 \n\t"
+    "29: ldi  r18, 0x59       \n\t"   /* second half of W3-W8: kZero, positive */
+    "ldi  r19, 0x08           \n\t"
+    "clr  r20                 \n\t"
+    "add  r18, r22            \n\t"
+    "adc  r19, r23            \n\t"
+    "26: cpi  r19, 0x0D       \n\t"   /* a >= kFmSilent: 0 */
+    "brsh 28f                 \n\t"
+    "movw r30, r18            \n\t"   /* v = exp_[a] */
+    "lsl  r30                 \n\t"
+    "rol  r31                 \n\t"
+    "subi r30, lo8(-(%[ex]))  \n\t"
+    "sbci r31, hi8(-(%[ex]))  \n\t"
+    "lpm  r18, Z+             \n\t"
+    "lpm  r19, Z              \n\t"
+    "sbrs r20, 1              \n\t"
+    "rjmp 27f                 \n\t"
+    "com  r19                 \n\t"   /* negative half */
+    "neg  r18                 \n\t"
+    "sbci r19, 0xFF           \n\t"
+    "rjmp 27f                 \n\t"
+    "28: clr  r18             \n\t"
+    "clr  r19                 \n\t"
+    "27:                      \n\t"
+    "std  Y+29, r18           \n\t"
+    "std  Y+30, r19           \n\t"
+    "ldd  r20, Y+19           \n\t" "std  Y+21, r20           \n\t"
+    "ldd  r20, Y+20           \n\t" "std  Y+22, r20           \n\t"
+    "std  Y+19, r18           \n\t"
+    "std  Y+20, r19           \n\t"
+    /* op 3: only op 4 can feed it */
+    "clr  r24                 \n\t"
+    "clr  r25                 \n\t"
+    "ldd  r20, Y+14           \n\t"
+    "sbrs r20, 3              \n\t"
+    "rjmp 12f                 \n\t"
+    "movw r24, r18            \n\t"
+    "asr  r25                 \n\t"
+    "ror  r24                 \n\t"
+    "12:                      \n\t"
+    "ldd  r18, Y+42           \n\t" "add  r10, r18            \n\t"
+    "ldd  r18, Y+43           \n\t" "adc  r11, r18            \n\t"
+    "ldd  r18, Y+44           \n\t" "adc  r12, r18            \n\t"
+    "ldd  r18, Y+45           \n\t" "adc  r13, r18            \n\t"
+    "add  r24, r12            \n\t"
+    "adc  r25, r13            \n\t"
+    "ldd  r21, Y+10           \n\t"
+    "ldd  r22, Y+4            \n\t"
+    "ldd  r23, Y+5            \n\t"
+    "tst  r21                 \n\t"   /* W1 is the common case: no wave tests */
+    "brne 21f                 \n\t"
+    "movw r30, r24            \n\t"
+    "mov  r20, r31            \n\t"
+    "sbrc r31, 0              \n\t"
+    "com  r30                 \n\t"
+    "rjmp 25f                 \n\t"
+    "21: mov  r20, r21        \n\t"
+    "andi r20, 6              \n\t"
+    "breq 22f                 \n\t"
+    "sbrc r25, 1              \n\t"
+    "rjmp 29f                 \n\t"
+    "22: movw r30, r24        \n\t"
+    "sbrs r21, 2              \n\t"
+    "rjmp 23f                 \n\t"
+    "lsl  r30                 \n\t"
+    "rol  r31                 \n\t"
+    "sbrc r21, 1              \n\t"
+    "andi r31, 1              \n\t"
+    "23: mov  r20, r31        \n\t"
+    "sbrc r31, 0              \n\t"
+    "com  r30                 \n\t"
+    "25: ldi  r31, 0          \n\t"   /* a = log_sin_[quarter] */
+    "lsl  r30                 \n\t"
+    "rol  r31                 \n\t"
+    "subi r30, lo8(-(%[ls]))  \n\t"
+    "sbci r31, hi8(-(%[ls]))  \n\t"
+    "lpm  r18, Z+             \n\t"
+    "lpm  r19, Z              \n\t"
+    "sbrs r21, 0              \n\t"
+    "rjmp 24f                 \n\t"
+    "lsl  r18                 \n\t"   /* W2: a <<= 1, capped at kZero */
+    "rol  r19                 \n\t"
+    "ldi  r30, 0x08           \n\t"
+    "cpi  r18, 0x5A           \n\t"
+    "cpc  r19, r30            \n\t"
+    "brlo 24f                 \n\t"
+    "ldi  r18, 0x59           \n\t"
+    "ldi  r19, 0x08           \n\t"
+    "24: add  r18, r22        \n\t"   /* a += attenuation */
+    "adc  r19, r23            \n\t"
+    "rjmp 26f                 \n\t"
+    "29: ldi  r18, 0x59       \n\t"   /* second half of W3-W8: kZero, positive */
+    "ldi  r19, 0x08           \n\t"
+    "clr  r20                 \n\t"
+    "add  r18, r22            \n\t"
+    "adc  r19, r23            \n\t"
+    "26: cpi  r19, 0x0D       \n\t"   /* a >= kFmSilent: 0 */
+    "brsh 28f                 \n\t"
+    "movw r30, r18            \n\t"   /* v = exp_[a] */
+    "lsl  r30                 \n\t"
+    "rol  r31                 \n\t"
+    "subi r30, lo8(-(%[ex]))  \n\t"
+    "sbci r31, hi8(-(%[ex]))  \n\t"
+    "lpm  r18, Z+             \n\t"
+    "lpm  r19, Z              \n\t"
+    "sbrs r20, 1              \n\t"
+    "rjmp 27f                 \n\t"
+    "com  r19                 \n\t"   /* negative half */
+    "neg  r18                 \n\t"
+    "sbci r19, 0xFF           \n\t"
+    "rjmp 27f                 \n\t"
+    "28: clr  r18             \n\t"
+    "clr  r19                 \n\t"
+    "27:                      \n\t"
+    "std  Y+27, r18           \n\t"
+    "std  Y+28, r19           \n\t"
+    /* op 2: op 3 and/or op 4 */
+    "clr  r24                 \n\t"
+    "clr  r25                 \n\t"
+    "ldd  r20, Y+13           \n\t"
+    "sbrs r20, 2              \n\t"
+    "rjmp 13f                 \n\t"
+    "add  r24, r18            \n\t"
+    "adc  r25, r19            \n\t"
+    "13: sbrs r20, 3          \n\t"
+    "rjmp 14f                 \n\t"
+    "ldd  r18, Y+29           \n\t"
+    "ldd  r19, Y+30           \n\t"
+    "add  r24, r18            \n\t"
+    "adc  r25, r19            \n\t"
+    "14: asr  r25             \n\t"
+    "ror  r24                 \n\t"
+    "ldd  r18, Y+38           \n\t" "add  r6, r18            \n\t"
+    "ldd  r18, Y+39           \n\t" "adc  r7, r18            \n\t"
+    "ldd  r18, Y+40           \n\t" "adc  r8, r18            \n\t"
+    "ldd  r18, Y+41           \n\t" "adc  r9, r18            \n\t"
+    "add  r24, r8             \n\t"
+    "adc  r25, r9             \n\t"
+    "ldd  r21, Y+9            \n\t"
+    "ldd  r22, Y+2            \n\t"
+    "ldd  r23, Y+3            \n\t"
+    "tst  r21                 \n\t"   /* W1 is the common case: no wave tests */
+    "brne 21f                 \n\t"
+    "movw r30, r24            \n\t"
+    "mov  r20, r31            \n\t"
+    "sbrc r31, 0              \n\t"
+    "com  r30                 \n\t"
+    "rjmp 25f                 \n\t"
+    "21: mov  r20, r21        \n\t"
+    "andi r20, 6              \n\t"
+    "breq 22f                 \n\t"
+    "sbrc r25, 1              \n\t"
+    "rjmp 29f                 \n\t"
+    "22: movw r30, r24        \n\t"
+    "sbrs r21, 2              \n\t"
+    "rjmp 23f                 \n\t"
+    "lsl  r30                 \n\t"
+    "rol  r31                 \n\t"
+    "sbrc r21, 1              \n\t"
+    "andi r31, 1              \n\t"
+    "23: mov  r20, r31        \n\t"
+    "sbrc r31, 0              \n\t"
+    "com  r30                 \n\t"
+    "25: ldi  r31, 0          \n\t"   /* a = log_sin_[quarter] */
+    "lsl  r30                 \n\t"
+    "rol  r31                 \n\t"
+    "subi r30, lo8(-(%[ls]))  \n\t"
+    "sbci r31, hi8(-(%[ls]))  \n\t"
+    "lpm  r18, Z+             \n\t"
+    "lpm  r19, Z              \n\t"
+    "sbrs r21, 0              \n\t"
+    "rjmp 24f                 \n\t"
+    "lsl  r18                 \n\t"   /* W2: a <<= 1, capped at kZero */
+    "rol  r19                 \n\t"
+    "ldi  r30, 0x08           \n\t"
+    "cpi  r18, 0x5A           \n\t"
+    "cpc  r19, r30            \n\t"
+    "brlo 24f                 \n\t"
+    "ldi  r18, 0x59           \n\t"
+    "ldi  r19, 0x08           \n\t"
+    "24: add  r18, r22        \n\t"   /* a += attenuation */
+    "adc  r19, r23            \n\t"
+    "rjmp 26f                 \n\t"
+    "29: ldi  r18, 0x59       \n\t"   /* second half of W3-W8: kZero, positive */
+    "ldi  r19, 0x08           \n\t"
+    "clr  r20                 \n\t"
+    "add  r18, r22            \n\t"
+    "adc  r19, r23            \n\t"
+    "26: cpi  r19, 0x0D       \n\t"   /* a >= kFmSilent: 0 */
+    "brsh 28f                 \n\t"
+    "movw r30, r18            \n\t"   /* v = exp_[a] */
+    "lsl  r30                 \n\t"
+    "rol  r31                 \n\t"
+    "subi r30, lo8(-(%[ex]))  \n\t"
+    "sbci r31, hi8(-(%[ex]))  \n\t"
+    "lpm  r18, Z+             \n\t"
+    "lpm  r19, Z              \n\t"
+    "sbrs r20, 1              \n\t"
+    "rjmp 27f                 \n\t"
+    "com  r19                 \n\t"   /* negative half */
+    "neg  r18                 \n\t"
+    "sbci r19, 0xFF           \n\t"
+    "rjmp 27f                 \n\t"
+    "28: clr  r18             \n\t"
+    "clr  r19                 \n\t"
+    "27:                      \n\t"
+    "std  Y+25, r18           \n\t"
+    "std  Y+26, r19           \n\t"
+    /* op 1: op 2, 3, 4 */
+    "clr  r24                 \n\t"
+    "clr  r25                 \n\t"
+    "ldd  r20, Y+12           \n\t"
+    "sbrs r20, 1              \n\t"
+    "rjmp 15f                 \n\t"
+    "add  r24, r18            \n\t"
+    "adc  r25, r19            \n\t"
+    "15: sbrs r20, 2          \n\t"
+    "rjmp 16f                 \n\t"
+    "ldd  r18, Y+27           \n\t"
+    "ldd  r19, Y+28           \n\t"
+    "add  r24, r18            \n\t"
+    "adc  r25, r19            \n\t"
+    "16: sbrs r20, 3          \n\t"
+    "rjmp 17f                 \n\t"
+    "ldd  r18, Y+29           \n\t"
+    "ldd  r19, Y+30           \n\t"
+    "add  r24, r18            \n\t"
+    "adc  r25, r19            \n\t"
+    "17: asr  r25             \n\t"
+    "ror  r24                 \n\t"
+    "ldd  r18, Y+34           \n\t" "add  r2, r18            \n\t"
+    "ldd  r18, Y+35           \n\t" "adc  r3, r18            \n\t"
+    "ldd  r18, Y+36           \n\t" "adc  r4, r18            \n\t"
+    "ldd  r18, Y+37           \n\t" "adc  r5, r18            \n\t"
+    "add  r24, r4             \n\t"
+    "adc  r25, r5             \n\t"
+    "ldd  r21, Y+8            \n\t"
+    "ldd  r22, Y+0            \n\t"
+    "ldd  r23, Y+1            \n\t"
+    "tst  r21                 \n\t"   /* W1 is the common case: no wave tests */
+    "brne 21f                 \n\t"
+    "movw r30, r24            \n\t"
+    "mov  r20, r31            \n\t"
+    "sbrc r31, 0              \n\t"
+    "com  r30                 \n\t"
+    "rjmp 25f                 \n\t"
+    "21: mov  r20, r21        \n\t"
+    "andi r20, 6              \n\t"
+    "breq 22f                 \n\t"
+    "sbrc r25, 1              \n\t"
+    "rjmp 29f                 \n\t"
+    "22: movw r30, r24        \n\t"
+    "sbrs r21, 2              \n\t"
+    "rjmp 23f                 \n\t"
+    "lsl  r30                 \n\t"
+    "rol  r31                 \n\t"
+    "sbrc r21, 1              \n\t"
+    "andi r31, 1              \n\t"
+    "23: mov  r20, r31        \n\t"
+    "sbrc r31, 0              \n\t"
+    "com  r30                 \n\t"
+    "25: ldi  r31, 0          \n\t"   /* a = log_sin_[quarter] */
+    "lsl  r30                 \n\t"
+    "rol  r31                 \n\t"
+    "subi r30, lo8(-(%[ls]))  \n\t"
+    "sbci r31, hi8(-(%[ls]))  \n\t"
+    "lpm  r18, Z+             \n\t"
+    "lpm  r19, Z              \n\t"
+    "sbrs r21, 0              \n\t"
+    "rjmp 24f                 \n\t"
+    "lsl  r18                 \n\t"   /* W2: a <<= 1, capped at kZero */
+    "rol  r19                 \n\t"
+    "ldi  r30, 0x08           \n\t"
+    "cpi  r18, 0x5A           \n\t"
+    "cpc  r19, r30            \n\t"
+    "brlo 24f                 \n\t"
+    "ldi  r18, 0x59           \n\t"
+    "ldi  r19, 0x08           \n\t"
+    "24: add  r18, r22        \n\t"   /* a += attenuation */
+    "adc  r19, r23            \n\t"
+    "rjmp 26f                 \n\t"
+    "29: ldi  r18, 0x59       \n\t"   /* second half of W3-W8: kZero, positive */
+    "ldi  r19, 0x08           \n\t"
+    "clr  r20                 \n\t"
+    "add  r18, r22            \n\t"
+    "adc  r19, r23            \n\t"
+    "26: cpi  r19, 0x0D       \n\t"   /* a >= kFmSilent: 0 */
+    "brsh 28f                 \n\t"
+    "movw r30, r18            \n\t"   /* v = exp_[a] */
+    "lsl  r30                 \n\t"
+    "rol  r31                 \n\t"
+    "subi r30, lo8(-(%[ex]))  \n\t"
+    "sbci r31, hi8(-(%[ex]))  \n\t"
+    "lpm  r18, Z+             \n\t"
+    "lpm  r19, Z              \n\t"
+    "sbrs r20, 1              \n\t"
+    "rjmp 27f                 \n\t"
+    "com  r19                 \n\t"   /* negative half */
+    "neg  r18                 \n\t"
+    "sbci r19, 0xFF           \n\t"
+    "rjmp 27f                 \n\t"
+    "28: clr  r18             \n\t"
+    "clr  r19                 \n\t"
+    "27:                      \n\t"
+    /* sum of carriers: op 1 is in r18:r19 */
+    "ldd  r20, Y+16           \n\t"
+    "clr  r24                 \n\t"
+    "clr  r25                 \n\t"
+    "sbrs r20, 0              \n\t"
+    "rjmp 30f                 \n\t"
+    "movw r24, r18            \n\t"
+    "30: sbrs r20, 1          \n\t"
+    "rjmp 31f                 \n\t"
+    "ldd  r18, Y+25           \n\t"
+    "ldd  r19, Y+26           \n\t"
+    "add  r24, r18            \n\t"
+    "adc  r25, r19            \n\t"
+    "31: sbrs r20, 2          \n\t"
+    "rjmp 32f                 \n\t"
+    "ldd  r18, Y+27           \n\t"
+    "ldd  r19, Y+28           \n\t"
+    "add  r24, r18            \n\t"
+    "adc  r25, r19            \n\t"
+    "32: sbrs r20, 3          \n\t"
+    "rjmp 33f                 \n\t"
+    "ldd  r18, Y+29           \n\t"
+    "ldd  r19, Y+30           \n\t"
+    "add  r24, r18            \n\t"
+    "adc  r25, r19            \n\t"
+    "33:                      \n\t"
+    /* out >>= 2; clip to -2048..2047; + 2048; store */
+    "asr  r25                 \n\t"
+    "ror  r24                 \n\t"
+    "asr  r25                 \n\t"
+    "ror  r24                 \n\t"
+    "ldi  r18, 0x00           \n\t"
+    "ldi  r19, 0x08           \n\t"
+    "cp   r24, r18            \n\t"
+    "cpc  r25, r19            \n\t"
+    "brlt 34f                 \n\t"
+    "ldi  r24, 0xFF           \n\t"
+    "ldi  r25, 0x07           \n\t"
+    "34: ldi  r18, 0x00       \n\t"
+    "ldi  r19, 0xF8           \n\t"
+    "cp   r24, r18            \n\t"
+    "cpc  r25, r19            \n\t"
+    "brge 35f                 \n\t"
+    "ldi  r24, 0x00           \n\t"
+    "ldi  r25, 0xF8           \n\t"
+    "35: subi r25, 0xF8       \n\t"
+    "st   X+, r24             \n\t"
+    "st   X+, r25             \n\t"
+    "ldd  r20, Y+31           \n\t"
+    "dec  r20                 \n\t"
+    "std  Y+31, r20           \n\t"
+    "breq 40f                 \n\t"
+    "rjmp 10b                 \n\t"
+    "40:                      \n\t"
+    /* phases back to op_ */
+    "ldd  r30, Y+32           \n\t"
+    "ldd  r31, Y+33           \n\t"
+    "st   Z+, r2              \n\t" "st   Z+, r3              \n\t"
+    "st   Z+, r4              \n\t" "st   Z+, r5              \n\t"
+    "adiw r30, 4              \n\t"
+    "st   Z+, r6              \n\t" "st   Z+, r7              \n\t"
+    "st   Z+, r8              \n\t" "st   Z+, r9              \n\t"
+    "adiw r30, 4              \n\t"
+    "st   Z+, r10             \n\t" "st   Z+, r11             \n\t"
+    "st   Z+, r12             \n\t" "st   Z+, r13             \n\t"
+    "adiw r30, 4              \n\t"
+    "st   Z+, r14             \n\t" "st   Z+, r15             \n\t"
+    "st   Z+, r16             \n\t" "st   Z+, r17             \n\t"
+    "eor  r1, r1              \n\t"
+    "pop  r29                 \n\t"
+    "pop  r28                 \n\t"
+    : "+x" (buffer)
+    : [pp] "i" (&params_), [ls] "i" (log_sin_), [ex] "i" (exp_)
+    : "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11", "r12",
+      "r13", "r14", "r15", "r16", "r17", "r18", "r19", "r20", "r21", "r22",
+      "r23", "r24", "r25", "r30", "r31", "r0", "r1", "cc", "memory");
+  feedback_[0] = params.fb[0];
+  feedback_[1] = params.fb[1];
 }
 #endif  // __AVR__
 

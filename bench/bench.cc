@@ -57,6 +57,43 @@ volatile uint8_t dbg_vca = 0, dbg_env2 = 0, dbg_engine = 0, dbg_rx = 0;
 
 void __attribute__((noinline)) bench_done() { asm volatile("nop"); }
 
+#ifdef BENCH_FMTEST
+// RenderC against RenderAsm: every algorithm, several waveform/level sets,
+// with and without feedback, phases advancing from the same state.
+volatile uint16_t fmtest_blocks = 0;
+volatile uint16_t fmtest_mismatches = 0;
+volatile uint16_t fmtest_first[4];  // algorithm, set, sample, c value, asm value
+static void FmTest() {
+  static const uint8_t waves[3][4] = {{0,0,0,0},{1,2,3,4},{5,6,7,1}};
+  static const uint16_t atts[3][4] = {{0,0,0,0},{0x100,0x200,0x080,0x300},{0x000,0xD00,0x600,0x040}};
+  static uint16_t out_c[20], out_a[20];
+  Fm4Op c, a;
+  for (uint8_t alg = 0; alg < 8; ++alg) {
+    for (uint8_t set = 0; set < 3; ++set) {
+      for (uint8_t fbi = 0; fbi < 3; ++fbi) {
+        uint16_t gain = fbi == 0 ? 0 : (fbi == 1 ? 0x0800 : 0xFFFF);
+        c.Init(); a.Init();
+        for (uint8_t i = 0; i < 4; ++i) {
+          uint32_t inc = 0x00123457UL * (i + 3) + alg * 0x1357;
+          c.mutable_op(i)->phase_increment = inc; a.mutable_op(i)->phase_increment = inc;
+          c.mutable_op(i)->phase = 0xABCD0000UL * i; a.mutable_op(i)->phase = 0xABCD0000UL * i;
+        }
+        for (uint8_t blk = 0; blk < 6; ++blk) {
+          c.RenderC(alg, waves[set], atts[set], gain, out_c, 20);
+          a.RenderAsm(alg, waves[set], atts[set], gain, out_a, 20);
+          ++fmtest_blocks;
+          for (uint8_t k = 0; k < 20; ++k) {
+            if (out_c[k] != out_a[k]) {
+              if (!fmtest_mismatches) { fmtest_first[0] = alg; fmtest_first[1] = set * 16 + fbi; fmtest_first[2] = out_c[k]; fmtest_first[3] = out_a[k]; }
+              ++fmtest_mismatches;
+            }
+          }
+        }
+      }
+    }
+  }
+}
+#endif
 #ifdef BENCH_OPCYCLES
 int16_t __attribute__((noinline)) OperatorCNoInline(uint8_t w, uint16_t p, uint16_t a) {
   return Fm4Op::OperatorC(w, p, a);
@@ -99,6 +136,12 @@ int main(void) {
   sei();
 #ifdef BENCH_OPTEST
   OperatorTest();
+  done = 1;
+  bench_done();
+  while (1) { }
+#endif
+#ifdef BENCH_FMTEST
+  FmTest();
   done = 1;
   bench_done();
   while (1) { }
