@@ -426,11 +426,9 @@ inline int16_t Fm4Op::Operator(
     "2: mov  %[t], r31        \n\t"   // bit 1 of t = negative (phase bit 9)
     "sbrc r31, 0              \n\t"   // phase & 0x100: quarter = ~quarter
     "com  r30                 \n\t"
-    "ldi  r31, 0              \n\t"   // Z = &log_sin_[quarter]
-    "lsl  r30                 \n\t"
-    "rol  r31                 \n\t"
-    "subi r30, lo8(-(%[ls]))  \n\t"
-    "sbci r31, hi8(-(%[ls]))  \n\t"
+    "lsl  r30                 \n\t"   // Z = &log_sin_[quarter]: 512-aligned
+    "ldi  r31, hi8(%[ls])     \n\t"
+    "adc  r31, r1             \n\t"   // r1 is 0 here
     "lpm  %A[v], Z+           \n\t"
     "lpm  %B[v], Z            \n\t"
     "sbrs %[w], 0             \n\t"   // wave & 1: a <<= 1, capped at kZero
@@ -457,11 +455,10 @@ inline int16_t Fm4Op::Operator(
     "lsr  %[q]                \n\t"
     "lsr  %[q]                \n\t"
     "andi %B[v], 0x03         \n\t"   // Z = &exp_[a & 0x3FF]
-    "movw r30, %A[v]          \n\t"
+    "movw r30, %A[v]          \n\t"   // Z = &exp_[a & 0x3FF]: 2 KB aligned
     "lsl  r30                 \n\t"
     "rol  r31                 \n\t"
-    "subi r30, lo8(-(%[ex]))  \n\t"
-    "sbci r31, hi8(-(%[ex]))  \n\t"
+    "ori  r31, hi8(%[ex])     \n\t"   /* base is 2 KB aligned: low bits free */
     "lpm  %A[v], Z+           \n\t"
     "lpm  %B[v], Z            \n\t"
     "tst  %[q]                \n\t"
@@ -635,11 +632,10 @@ inline __attribute__((noinline)) void Fm4Op::RenderAsm(
     "23: mov  r20, r31        \n\t"
     "sbrc r31, 0              \n\t"
     "com  r30                 \n\t"
-    "25: ldi  r31, 0          \n\t"   /* a = log_sin_[quarter] */
-    "lsl  r30                 \n\t"
-    "rol  r31                 \n\t"
-    "subi r30, lo8(-(%[ls]))  \n\t"
-    "sbci r31, hi8(-(%[ls]))  \n\t"
+    "25: lsl  r30             \n\t"   /* a = log_sin_[quarter]: 512-aligned */
+    "ldi  r31, hi8(%[ls])     \n\t"
+    "brcc .+2                 \n\t"
+    "inc  r31                 \n\t"
     "lpm  r18, Z+             \n\t"
     "lpm  r19, Z              \n\t"
     "sbrs r21, 0              \n\t"
@@ -666,11 +662,10 @@ inline __attribute__((noinline)) void Fm4Op::RenderAsm(
     "lsr  r24                 \n\t"
     "lsr  r24                 \n\t"
     "andi r19, 0x03           \n\t"
-    "movw r30, r18            \n\t"
+    "movw r30, r18            \n\t"   /* exp_: 2 KB aligned */
     "lsl  r30                 \n\t"
     "rol  r31                 \n\t"
-    "subi r30, lo8(-(%[ex]))  \n\t"
-    "sbci r31, hi8(-(%[ex]))  \n\t"
+    "ori  r31, hi8(%[ex])     \n\t"   /* base is 2 KB aligned: low bits free */
     "lpm  r18, Z+             \n\t"
     "lpm  r19, Z              \n\t"
     "tst  r24                 \n\t"
@@ -747,11 +742,10 @@ inline __attribute__((noinline)) void Fm4Op::RenderAsm(
     "23: mov  r20, r31        \n\t"
     "sbrc r31, 0              \n\t"
     "com  r30                 \n\t"
-    "25: ldi  r31, 0          \n\t"   /* a = log_sin_[quarter] */
-    "lsl  r30                 \n\t"
-    "rol  r31                 \n\t"
-    "subi r30, lo8(-(%[ls]))  \n\t"
-    "sbci r31, hi8(-(%[ls]))  \n\t"
+    "25: lsl  r30             \n\t"   /* a = log_sin_[quarter]: 512-aligned */
+    "ldi  r31, hi8(%[ls])     \n\t"
+    "brcc .+2                 \n\t"
+    "inc  r31                 \n\t"
     "lpm  r18, Z+             \n\t"
     "lpm  r19, Z              \n\t"
     "sbrs r21, 0              \n\t"
@@ -778,11 +772,10 @@ inline __attribute__((noinline)) void Fm4Op::RenderAsm(
     "lsr  r24                 \n\t"
     "lsr  r24                 \n\t"
     "andi r19, 0x03           \n\t"
-    "movw r30, r18            \n\t"
+    "movw r30, r18            \n\t"   /* exp_: 2 KB aligned */
     "lsl  r30                 \n\t"
     "rol  r31                 \n\t"
-    "subi r30, lo8(-(%[ex]))  \n\t"
-    "sbci r31, hi8(-(%[ex]))  \n\t"
+    "ori  r31, hi8(%[ex])     \n\t"   /* base is 2 KB aligned: low bits free */
     "lpm  r18, Z+             \n\t"
     "lpm  r19, Z              \n\t"
     "tst  r24                 \n\t"
@@ -861,11 +854,10 @@ inline __attribute__((noinline)) void Fm4Op::RenderAsm(
     "23: mov  r20, r31        \n\t"
     "sbrc r31, 0              \n\t"
     "com  r30                 \n\t"
-    "25: ldi  r31, 0          \n\t"   /* a = log_sin_[quarter] */
-    "lsl  r30                 \n\t"
-    "rol  r31                 \n\t"
-    "subi r30, lo8(-(%[ls]))  \n\t"
-    "sbci r31, hi8(-(%[ls]))  \n\t"
+    "25: lsl  r30             \n\t"   /* a = log_sin_[quarter]: 512-aligned */
+    "ldi  r31, hi8(%[ls])     \n\t"
+    "brcc .+2                 \n\t"
+    "inc  r31                 \n\t"
     "lpm  r18, Z+             \n\t"
     "lpm  r19, Z              \n\t"
     "sbrs r21, 0              \n\t"
@@ -892,11 +884,10 @@ inline __attribute__((noinline)) void Fm4Op::RenderAsm(
     "lsr  r24                 \n\t"
     "lsr  r24                 \n\t"
     "andi r19, 0x03           \n\t"
-    "movw r30, r18            \n\t"
+    "movw r30, r18            \n\t"   /* exp_: 2 KB aligned */
     "lsl  r30                 \n\t"
     "rol  r31                 \n\t"
-    "subi r30, lo8(-(%[ex]))  \n\t"
-    "sbci r31, hi8(-(%[ex]))  \n\t"
+    "ori  r31, hi8(%[ex])     \n\t"   /* base is 2 KB aligned: low bits free */
     "lpm  r18, Z+             \n\t"
     "lpm  r19, Z              \n\t"
     "tst  r24                 \n\t"
@@ -981,11 +972,10 @@ inline __attribute__((noinline)) void Fm4Op::RenderAsm(
     "23: mov  r20, r31        \n\t"
     "sbrc r31, 0              \n\t"
     "com  r30                 \n\t"
-    "25: ldi  r31, 0          \n\t"   /* a = log_sin_[quarter] */
-    "lsl  r30                 \n\t"
-    "rol  r31                 \n\t"
-    "subi r30, lo8(-(%[ls]))  \n\t"
-    "sbci r31, hi8(-(%[ls]))  \n\t"
+    "25: lsl  r30             \n\t"   /* a = log_sin_[quarter]: 512-aligned */
+    "ldi  r31, hi8(%[ls])     \n\t"
+    "brcc .+2                 \n\t"
+    "inc  r31                 \n\t"
     "lpm  r18, Z+             \n\t"
     "lpm  r19, Z              \n\t"
     "sbrs r21, 0              \n\t"
@@ -1012,11 +1002,10 @@ inline __attribute__((noinline)) void Fm4Op::RenderAsm(
     "lsr  r24                 \n\t"
     "lsr  r24                 \n\t"
     "andi r19, 0x03           \n\t"
-    "movw r30, r18            \n\t"
+    "movw r30, r18            \n\t"   /* exp_: 2 KB aligned */
     "lsl  r30                 \n\t"
     "rol  r31                 \n\t"
-    "subi r30, lo8(-(%[ex]))  \n\t"
-    "sbci r31, hi8(-(%[ex]))  \n\t"
+    "ori  r31, hi8(%[ex])     \n\t"   /* base is 2 KB aligned: low bits free */
     "lpm  r18, Z+             \n\t"
     "lpm  r19, Z              \n\t"
     "tst  r24                 \n\t"

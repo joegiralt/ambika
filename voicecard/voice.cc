@@ -71,6 +71,10 @@ KarplusStrong Voice::karplus_;
 WestCoast Voice::westcoast_;
 uint8_t Voice::last_engine_ = 0xFF;
 
+// Cache for the FM operator increments (see RenderOscillators).
+static int16_t fm_last_pitch = 0x7FFF;
+static uint8_t fm_last_ratio[4], fm_last_detune[4];
+
 // TX81Z frequency ratios as 8.8 fixed-point (ratio × 256).
 #ifdef __AVR__
 // Operator routing per algorithm (see Fm4Op::Sample): for ops 1-3 the mask
@@ -107,7 +111,8 @@ const prog_uint16_t Fm4Op::tx81z_ratios_[] PROGMEM = {
 //                  rom = the OPZ volume ROM (ymfm s_power_table)
 //   env_to_attenuation_[e] = round(-log2(e / 255) * 256), [0] = silent
 //   feedback_gain_[f] = round(8192 * 2^(f / 16))
-const prog_uint16_t Fm4Op::log_sin_[256] PROGMEM = {
+// 512-byte aligned: the operator forms the address with a shift and a carry.
+const prog_uint16_t Fm4Op::log_sin_[256] PROGMEM __attribute__((aligned(512))) = {
    2137,  1731,  1543,  1419,  1326,  1252,  1190,  1137,
    1091,  1050,  1013,   979,   949,   920,   894,   869,
     846,   825,   804,   785,   767,   749,   732,   717,
@@ -144,7 +149,8 @@ const prog_uint16_t Fm4Op::log_sin_[256] PROGMEM = {
 // exp_ holds the volume ROM shifted right by 0..3 (four copies); the
 // operator shifts by the remaining multiple of 4 at run time. The 13 full
 // copies were 6.6 KB of flash.
-const prog_uint16_t Fm4Op::exp_[4 * 256] PROGMEM = {
+// 2 KB aligned, for the same reason.
+const prog_uint16_t Fm4Op::exp_[4 * 256] PROGMEM __attribute__((aligned(2048))) = {
    8168,  8148,  8124,  8104,  8080,  8060,  8040,  8016,
    7996,  7972,  7952,  7932,  7908,  7888,  7864,  7844,
    7824,  7804,  7780,  7760,  7740,  7720,  7696,  7676,
@@ -801,7 +807,7 @@ inline void Voice::RenderOscillators() {
   if (engine != last_engine_) {
     last_engine_ = engine;
     switch (engine) {
-      case ENGINE_FM4OP:    fm4op_.Init(); break;
+      case ENGINE_FM4OP:    fm4op_.Init(); fm_last_pitch = 0x7FFF; break;
       case ENGINE_KS_PLUCK: karplus_.Init(); break;
       case ENGINE_WESTCOAST: westcoast_.Init(); break;
       default: break;
@@ -817,21 +823,30 @@ inline void Voice::RenderOscillators() {
     // padding[3]: FM transpose in semitones (TX81Z TRPS).
     int16_t fm_pitch =
         base_pitch + static_cast<int8_t>(patch_.padding[3]) * 128;
-    uint32_t base_increment =
-        ComputePhaseIncrementFine(fm_pitch) << kFmRateShift;
-
-    // Set up operator phase increments from patch fields.
-    // Coarse ratio is a TX81Z-style index (0-63) into the ratio table.
-    fm4op_.SetOperatorIncrement(0, base_increment,
-        static_cast<uint8_t>(patch_.osc[0].range), patch_.osc[0].detune);
-    fm4op_.SetOperatorIncrement(1, base_increment,
-        static_cast<uint8_t>(patch_.osc[1].range), patch_.osc[1].detune);
-    // Modulatable values come from the mod matrix (dst_), scaled 0-127.
-    fm4op_.SetOperatorIncrement(2, base_increment,
-        dst_[MOD_DST_MIX_BALANCE] >> 7, static_cast<int8_t>(patch_.mix_op));
-    fm4op_.SetOperatorIncrement(3, base_increment,
-        dst_[MOD_DST_MIX_PARAM] >> 7,
-        static_cast<int8_t>(patch_.mix_sub_osc_shape));
+    // The four increments only change with the pitch, ratios or detunes;
+    // recomputing them is five 32-bit multiplies a block.
+    uint8_t ratio[4] = {
+        static_cast<uint8_t>(patch_.osc[0].range),
+        static_cast<uint8_t>(patch_.osc[1].range),
+        static_cast<uint8_t>(dst_[MOD_DST_MIX_BALANCE] >> 7),
+        static_cast<uint8_t>(dst_[MOD_DST_MIX_PARAM] >> 7) };
+    uint8_t detune[4] = {
+        static_cast<uint8_t>(patch_.osc[0].detune),
+        static_cast<uint8_t>(patch_.osc[1].detune),
+        patch_.mix_op, patch_.mix_sub_osc_shape };
+    if (fm_pitch != fm_last_pitch || memcmp(ratio, fm_last_ratio, 4) ||
+        memcmp(detune, fm_last_detune, 4)) {
+      fm_last_pitch = fm_pitch;
+      memcpy(fm_last_ratio, ratio, 4);
+      memcpy(fm_last_detune, detune, 4);
+      uint32_t base_increment =
+          ComputePhaseIncrementFine(fm_pitch) << kFmRateShift;
+      // Coarse ratio is a TX81Z-style index (0-63) into the ratio table.
+      for (uint8_t i = 0; i < 4; ++i) {
+        fm4op_.SetOperatorIncrement(i, base_increment, ratio[i],
+                                    static_cast<int8_t>(detune[i]));
+      }
+    }
 
     // Extract operator waveforms from packed nibbles.
     uint8_t op_waveform[4];
