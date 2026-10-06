@@ -56,6 +56,13 @@ the bench's sample-for-sample comparison against the C reference):
 | sliding-window `ExpandHalfRate`, skip zero mod slots | 20,150 | 22,250 | 22,500 | |
 | classic: skip the noise/fuzz loop at zero gain | | | | 17,700 |
 | `Fm4Op::RenderAsm`: phases in registers, inlined operators | 17,800 | 19,900 | 20,300 | |
+| classic: no-sync oscillator loop; envelope parameter cache | 16,900 | | | saw+saw 23,700 -> 21,330 |
+
+Hardware, build 5f5bb0a: FM bare sine 0 bursts/s at A2/A3/A5, LatelyBass 0,
+DynoWurlie 0.3/s (from 103). The classic sine's buzz was a 16-bit wrap in
+the sine interpolation (d1756e9), not CPU. Classic saw+saw is still 5 %
+over in the simulator; the pad patch more. Flash is at 32,034 of 32,256
+and RAM at 1,857 of 2,048, so further cuts have to be cheap in both.
 
 What the FM sine block is now: control rate 2,900, render 8,800, expansion
 1,570, ring write 750, ISR 3,800, loop overhead the rest.

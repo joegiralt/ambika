@@ -48,6 +48,8 @@ class Envelope {
     stage_target_[DEAD] = 0;
     stage_phase_increment_[SUSTAIN] = 0;
     stage_phase_increment_[DEAD] = 0;
+    last_key_ = 0xFFFFFFFF;  // no parameters cached yet
+    last_curve_ = 0xFF;
   }
 
   uint8_t stage() { return stage_; }
@@ -69,6 +71,16 @@ class Envelope {
       uint8_t sustain,
       uint8_t release,
       uint8_t curve = ENVELOPE_CURVE_EXPONENTIAL) {
+    // Called every block for seven envelopes; the parameters rarely change,
+    // and the three table lookups are most of its cost. Skip when unchanged.
+    uint32_t key = (static_cast<uint32_t>(attack) << 24) |
+                   (static_cast<uint32_t>(decay) << 16) |
+                   (static_cast<uint32_t>(sustain) << 8) | release;
+    if (key == last_key_ && curve == last_curve_) {
+      return;
+    }
+    last_key_ = key;
+    last_curve_ = curve;
     linear_ = (curve == ENVELOPE_CURVE_LINEAR ||
                curve == ENVELOPE_CURVE_LOOP_LINEAR);
     looping_ = (curve == ENVELOPE_CURVE_LOOP ||
@@ -121,6 +133,8 @@ class Envelope {
   uint8_t stage_target_[NUM_SEGMENTS];
   // Current stage.
   uint8_t stage_;
+  uint32_t last_key_;
+  uint8_t last_curve_;
 
   // Start and end value of the current segment.
   uint8_t a_;
