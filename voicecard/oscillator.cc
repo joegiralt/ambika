@@ -274,17 +274,26 @@ void Oscillator::RenderQuadSawPad(uint8_t* buffer) {
     increments[i] = phase_increment;
   }
   
+  // The three extra phases in registers for the block rather than in RAM.
+  // (A separate no-sync loop would save another 300 cycles but not fit in
+  // flash.)
+  uint16_t p0 = data_.qs.phase[0];
+  uint16_t p1 = data_.qs.phase[1];
+  uint16_t p2 = data_.qs.phase[2];
   BEGIN_SAMPLE_LOOP
-    UPDATE_PHASE
-    data_.qs.phase[0] += increments[0];
-    data_.qs.phase[1] += increments[1];
-    data_.qs.phase[2] += increments[2];
+    UPDATE_PHASE_MORE_REGISTERS
+    p0 += increments[0];
+    p1 += increments[1];
+    p2 += increments[2];
     uint8_t value = (phase.integral >> 10);
-    value += (data_.qs.phase[0] >> 10);
-    value += (data_.qs.phase[1] >> 10);
-    value += (data_.qs.phase[2] >> 10);
+    value += (p0 >> 10);
+    value += (p1 >> 10);
+    value += (p2 >> 10);
     *buffer++ = value;
   END_SAMPLE_LOOP
+  data_.qs.phase[0] = p0;
+  data_.qs.phase[1] = p1;
+  data_.qs.phase[2] = p2;
 }
 
 // ------- Low-passed, then high-passed white noise --------------------------
