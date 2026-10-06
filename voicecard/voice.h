@@ -86,6 +86,13 @@ class Voice {
 
   static void ProcessBlock();
 
+  // Half-rate expansion (see voice.cc). Public for bench/.
+  static void ExpandHalfRateC();
+  static uint16_t* render_wide() { return render_.wide; }  // bench/
+#ifdef __AVR__
+  static void ExpandHalfRateToRing();
+#endif
+
   // Called whenever a write to the CV analog outputs has to be made.
   static inline uint8_t cutoff()  {
     return modulation_destinations_[MOD_DST_FILTER_CUTOFF];

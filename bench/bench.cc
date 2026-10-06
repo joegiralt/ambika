@@ -62,6 +62,39 @@ volatile uint8_t dbg_vca = 0, dbg_env2 = 0, dbg_engine = 0, dbg_rx = 0;
 
 void __attribute__((noinline)) bench_done() { asm volatile("nop"); }
 
+#ifdef BENCH_EXPTEST
+// ExpandHalfRateToRing against ExpandHalfRateC: same input and history,
+// output read back from the ring, one block starting near the ring's end.
+volatile uint16_t exptest_blocks = 0;
+volatile uint16_t exptest_mismatches = 0;
+volatile uint16_t exptest_first[3];
+static uint16_t exp_in[kAudioBlockSize / 2], exp_out[kAudioBlockSize];
+static void ExpTest() {
+  uint16_t seed = 0xBEEF;
+  for (uint8_t blk = 0; blk < 6; ++blk) {
+    uint16_t* wide = Voice::render_wide();
+    for (uint8_t i = 0; i < kAudioBlockSize / 2; ++i) {
+      seed = seed * 31421 + 6927;
+      exp_in[i] = blk == 2 ? (i & 1 ? 4095 : 0) : (seed >> 4);  // 12-bit; one block of full swings
+      wide[i] = exp_in[i];
+    }
+    Voice::ExpandHalfRateC();                       // in place: wide[0..39]
+    memcpy(exp_out, wide, sizeof(exp_out));
+    for (uint8_t i = 0; i < kAudioBlockSize / 2; ++i) wide[i] = exp_in[i];
+    uint8_t w = blk == 3 ? 100 : 0;
+    AudioRing::write_ptr_ = w;
+    Voice::ExpandHalfRateToRing();
+    ++exptest_blocks;
+    for (uint8_t k = 0; k < kAudioBlockSize; ++k) {
+      uint16_t a = AudioRing::buffer_[(w + k) & 127];
+      if (a != exp_out[k]) {
+        if (!exptest_mismatches) { exptest_first[0] = blk * 64 + k; exptest_first[1] = exp_out[k]; exptest_first[2] = a; }
+        ++exptest_mismatches;
+      }
+    }
+  }
+}
+#endif
 #ifdef BENCH_OSCTEST
 // The assembly wavetable loop against the C one: saw and square (parameter 0
 // takes the wavetable path), several notes, increments and parameters, from
@@ -180,6 +213,12 @@ int main(void) {
   sei();
 #ifdef BENCH_OPTEST
   OperatorTest();
+  done = 1;
+  bench_done();
+  while (1) { }
+#endif
+#ifdef BENCH_EXPTEST
+  ExpTest();
   done = 1;
   bench_done();
   while (1) { }

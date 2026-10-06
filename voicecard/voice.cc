@@ -736,7 +736,7 @@ inline void Voice::UpdateDestinations() {
 }
 
 /* static */
-void Voice::ExpandHalfRate() {
+void Voice::ExpandHalfRateC() {
   // The first half of render_.wide holds a block rendered at half the sample
   // rate. Expand it in place, back to front. Repeating samples would mirror
   // the whole spectrum into 9.8-19.6 kHz; the midpoint between neighbours
@@ -782,6 +782,88 @@ void Voice::ExpandHalfRate() {
   history[0] = keep0;
   history[1] = keep1;
   history[2] = keep2;
+}
+
+#ifdef __AVR__
+// The same fit, forward, written straight into the audio ring (wrapping at
+// 128) instead of in place and then copied: 1,570 + 700 cycles a block
+// become about 1,100. bench/ BENCH_EXPTEST checks it against ExpandHalfRateC.
+void Voice::ExpandHalfRateToRing() {
+  static uint16_t history[3] = { 2048, 2048, 2048 };  // newest first
+  const uint8_t half = kAudioBlockSize >> 1;
+  uint16_t* src = render_.wide;
+  uint16_t* dst = &AudioRing::buffer_[AudioRing::write_ptr_];
+  uint16_t s1 = history[0], s2 = history[1], s3 = history[2];
+  uint16_t s0, c, d;
+  uint8_t n = half;
+  asm volatile(
+    "1:                       \n\t"
+    "ld   %A[s0], Z+          \n\t"
+    "ld   %B[s0], Z+          \n\t"
+    "movw %A[d], %A[s0]       \n\t"   /* d = s0 - s2 */
+    "sub  %A[d], %A[s2]       \n\t"
+    "sbc  %B[d], %B[s2]       \n\t"
+    "movw %A[c], %A[s3]       \n\t"   /* c = s3 - s1 + 5 * d */
+    "sub  %A[c], %A[s1]       \n\t"
+    "sbc  %B[c], %B[s1]       \n\t"
+    "add  %A[c], %A[d]        \n\t"
+    "adc  %B[c], %B[d]        \n\t"
+    "lsl  %A[d]               \n\t"
+    "rol  %B[d]               \n\t"
+    "lsl  %A[d]               \n\t"
+    "rol  %B[d]               \n\t"
+    "add  %A[c], %A[d]        \n\t"
+    "adc  %B[c], %B[d]        \n\t"
+    "asr  %B[c]               \n\t"   /* c >>= 4, arithmetic */
+    "ror  %A[c]               \n\t"
+    "asr  %B[c]               \n\t"
+    "ror  %A[c]               \n\t"
+    "asr  %B[c]               \n\t"
+    "ror  %A[c]               \n\t"
+    "asr  %B[c]               \n\t"
+    "ror  %A[c]               \n\t"
+    "add  %A[c], %A[s1]       \n\t"   /* y = s1 + c, clipped to 0..4095 */
+    "adc  %B[c], %B[s1]       \n\t"
+    "sbrs %B[c], 7            \n\t"
+    "rjmp 2f                  \n\t"
+    "clr  %A[c]               \n\t"
+    "clr  %B[c]               \n\t"
+    "rjmp 3f                  \n\t"
+    "2: cpi  %B[c], 0x10      \n\t"
+    "brlo 3f                  \n\t"
+    "ldi  %A[c], 0xFF         \n\t"
+    "ldi  %B[c], 0x0F         \n\t"
+    "3: st   X+, %A[c]        \n\t"
+    "st   X+, %B[c]           \n\t"
+    "st   X+, %A[s0]          \n\t"
+    "st   X+, %B[s0]          \n\t"
+    "cp   r26, %A[end]        \n\t"   /* wrap at the end of the ring */
+    "cpc  r27, %B[end]        \n\t"
+    "brne 4f                  \n\t"
+    "movw r26, %A[start]      \n\t"
+    "4: movw %A[s3], %A[s2]   \n\t"
+    "movw %A[s2], %A[s1]      \n\t"
+    "movw %A[s1], %A[s0]      \n\t"
+    "dec  %[n]                \n\t"
+    "brne 1b                  \n\t"
+    : [s0] "=&r" (s0), [c] "=&d" (c), [d] "=&r" (d), [n] "+r" (n),
+      [s1] "+r" (s1), [s2] "+r" (s2), [s3] "+r" (s3),
+      "+x" (dst), "+z" (src)
+    : [end] "r" (&AudioRing::buffer_[128]), [start] "r" (AudioRing::buffer_)
+    : "cc", "memory");
+  history[0] = s1;
+  history[1] = s2;
+  history[2] = s3;
+  AudioRing::write_ptr_ = (AudioRing::write_ptr_ + kAudioBlockSize) & 127;
+}
+#endif
+
+void Voice::ExpandHalfRate() {
+#ifdef __AVR__
+  ExpandHalfRateToRing();
+#else
+  ExpandHalfRateC();
+#endif
 }
 
 /* static */
@@ -1120,8 +1202,10 @@ void Voice::ProcessBlock() {
   // Post-mix processing.
   if (is_special) {
     // In FM4OP/KS mode, skip noise/fuzz post-processing.
-    // Straight into the ring: the main loop checked there is room.
+#ifndef __AVR__
+    // On the AVR, ExpandHalfRateToRing already wrote the block into the ring.
     audio_buffer.WriteBlock(render_.wide, kAudioBlockSize);
+#endif
   } else {
     uint8_t noise = Random::state_msb();
     uint8_t noise_gain = U15ShiftRight7(dst_[MOD_DST_MIX_NOISE]);
