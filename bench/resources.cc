@@ -1,0 +1,1 @@
+../voicecard/resources.cc

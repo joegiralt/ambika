@@ -28,6 +28,14 @@
 using namespace avrlib;
 
 namespace ambika {
+// Cycle profile hooks for bench/ (empty in the firmware build).
+#ifdef BENCH_PROFILE
+extern volatile uint16_t bench_mark[8];
+#define BENCH_MARK(i) bench_mark[i] = TCNT1
+#else
+#define BENCH_MARK(i)
+#endif
+
 
 /* extern */
 Voice voice;
@@ -63,7 +71,31 @@ KarplusStrong Voice::karplus_;
 WestCoast Voice::westcoast_;
 uint8_t Voice::last_engine_ = 0xFF;
 
+// The half-rate engines render into render_.wide after this many samples of
+// history, so the expansion's window is the buffer itself (see ExpandHalfRate).
+static const uint8_t kExpandHistory = 5;
+
+// Cache for the FM operator increments (see RenderOscillators).
+static int16_t fm_last_pitch = 0x7FFF;
+static uint8_t fm_last_ratio[4], fm_last_detune[4];
+
 // TX81Z frequency ratios as 8.8 fixed-point (ratio × 256).
+#ifdef __AVR__
+// Operator routing per algorithm (see Fm4Op::Sample): for ops 1-3 the mask
+// of outputs feeding its phase (bit j = op j+1), then the carrier mask.
+const prog_uint8_t Fm4Op::routing_[8][4] PROGMEM = {
+  { 0x02, 0x04, 0x08, 0x01 },  // 1: 4->3->2->1
+  { 0x02, 0x0C, 0x00, 0x01 },  // 2: (4+3)->2->1
+  { 0x0A, 0x04, 0x00, 0x01 },  // 3: (4+(3->2))->1
+  { 0x06, 0x00, 0x08, 0x01 },  // 4: ((4->3)+2)->1
+  { 0x02, 0x00, 0x08, 0x05 },  // 5: (4->3)+(2->1)
+  { 0x08, 0x08, 0x08, 0x07 },  // 6: 4->(1+2+3)
+  { 0x00, 0x00, 0x08, 0x07 },  // 7: (4->3)+2+1
+  { 0x00, 0x00, 0x00, 0x0F },  // 8: 1+2+3+4
+};
+FmRenderParams Fm4Op::params_;
+#endif
+
 const prog_uint16_t Fm4Op::tx81z_ratios_[] PROGMEM = {
   128,  182,  200,  223,  256,  361,  402,  443,
   512,  722,  768,  804,  886, 1024, 1085, 1206,
@@ -78,11 +110,13 @@ const prog_uint16_t Fm4Op::tx81z_ratios_[] PROGMEM = {
 // FM log-domain tables (see fm4op.h). Generated with:
 //   log_sin_[i]  = round(-log2(sin((i + 0.5) * pi / 512)) * 256)
 //                  (identical to the OPZ log-sine ROM)
-//   exp_[i]      = ((rom[i & 255] | 0x400) << 2) >> (i >> 8), i < 13 * 256,
+//   exp_[i]      = ((rom[i & 255] | 0x400) << 2) >> (i >> 8), i < 4 * 256,
+//                  (the operator shifts by 4 * (a >> 10) on top),
 //                  rom = the OPZ volume ROM (ymfm s_power_table)
 //   env_to_attenuation_[e] = round(-log2(e / 255) * 256), [0] = silent
 //   feedback_gain_[f] = round(8192 * 2^(f / 16))
-const prog_uint16_t Fm4Op::log_sin_[256] PROGMEM = {
+// 512-byte aligned: the operator forms the address with a shift and a carry.
+const prog_uint16_t Fm4Op::log_sin_[256] PROGMEM __attribute__((aligned(512))) = {
    2137,  1731,  1543,  1419,  1326,  1252,  1190,  1137,
    1091,  1050,  1013,   979,   949,   920,   894,   869,
     846,   825,   804,   785,   767,   749,   732,   717,
@@ -116,7 +150,11 @@ const prog_uint16_t Fm4Op::log_sin_[256] PROGMEM = {
       2,     1,     1,     1,     1,     1,     1,     1,
       0,     0,     0,     0,     0,     0,     0,     0,
 };
-const prog_uint16_t Fm4Op::exp_[13 * 256] PROGMEM = {
+// exp_ holds the volume ROM shifted right by 0..3 (four copies); the
+// operator shifts by the remaining multiple of 4 at run time. The 13 full
+// copies were 6.6 KB of flash.
+// 2 KB aligned, for the same reason.
+const prog_uint16_t Fm4Op::exp_[4 * 256] PROGMEM __attribute__((aligned(2048))) = {
    8168,  8148,  8124,  8104,  8080,  8060,  8040,  8016,
    7996,  7972,  7952,  7932,  7908,  7888,  7864,  7844,
    7824,  7804,  7780,  7760,  7740,  7720,  7696,  7676,
@@ -245,294 +283,6 @@ const prog_uint16_t Fm4Op::exp_[13 * 256] PROGMEM = {
     545,   543,   542,   540,   539,   537,   536,   534,
     533,   532,   530,   529,   527,   526,   524,   523,
     522,   520,   519,   517,   516,   515,   513,   512,
-    510,   509,   507,   506,   505,   503,   502,   501,
-    499,   498,   497,   495,   494,   493,   491,   490,
-    489,   487,   486,   485,   483,   482,   481,   479,
-    478,   477,   476,   474,   473,   472,   470,   469,
-    468,   467,   465,   464,   463,   462,   460,   459,
-    458,   457,   455,   454,   453,   452,   450,   449,
-    448,   447,   446,   444,   443,   442,   441,   440,
-    438,   437,   436,   435,   434,   433,   431,   430,
-    429,   428,   427,   426,   424,   423,   422,   421,
-    420,   419,   418,   416,   415,   414,   413,   412,
-    411,   410,   409,   407,   406,   405,   404,   403,
-    402,   401,   400,   399,   398,   397,   396,   394,
-    393,   392,   391,   390,   389,   388,   387,   386,
-    385,   384,   383,   382,   381,   380,   379,   378,
-    377,   376,   375,   374,   373,   372,   371,   370,
-    369,   368,   367,   366,   365,   364,   363,   362,
-    361,   360,   359,   358,   357,   356,   355,   354,
-    353,   352,   351,   350,   349,   348,   347,   346,
-    345,   344,   344,   343,   342,   341,   340,   339,
-    338,   337,   336,   335,   334,   333,   333,   332,
-    331,   330,   329,   328,   327,   326,   325,   325,
-    324,   323,   322,   321,   320,   319,   318,   318,
-    317,   316,   315,   314,   313,   312,   312,   311,
-    310,   309,   308,   307,   307,   306,   305,   304,
-    303,   302,   302,   301,   300,   299,   298,   298,
-    297,   296,   295,   294,   294,   293,   292,   291,
-    290,   290,   289,   288,   287,   286,   286,   285,
-    284,   283,   283,   282,   281,   280,   280,   279,
-    278,   277,   277,   276,   275,   274,   274,   273,
-    272,   271,   271,   270,   269,   268,   268,   267,
-    266,   266,   265,   264,   263,   263,   262,   261,
-    261,   260,   259,   258,   258,   257,   256,   256,
-    255,   254,   253,   253,   252,   251,   251,   250,
-    249,   249,   248,   247,   247,   246,   245,   245,
-    244,   243,   243,   242,   241,   241,   240,   239,
-    239,   238,   238,   237,   236,   236,   235,   234,
-    234,   233,   232,   232,   231,   231,   230,   229,
-    229,   228,   227,   227,   226,   226,   225,   224,
-    224,   223,   223,   222,   221,   221,   220,   220,
-    219,   218,   218,   217,   217,   216,   215,   215,
-    214,   214,   213,   213,   212,   211,   211,   210,
-    210,   209,   209,   208,   207,   207,   206,   206,
-    205,   205,   204,   203,   203,   202,   202,   201,
-    201,   200,   200,   199,   199,   198,   198,   197,
-    196,   196,   195,   195,   194,   194,   193,   193,
-    192,   192,   191,   191,   190,   190,   189,   189,
-    188,   188,   187,   187,   186,   186,   185,   185,
-    184,   184,   183,   183,   182,   182,   181,   181,
-    180,   180,   179,   179,   178,   178,   177,   177,
-    176,   176,   175,   175,   174,   174,   173,   173,
-    172,   172,   172,   171,   171,   170,   170,   169,
-    169,   168,   168,   167,   167,   166,   166,   166,
-    165,   165,   164,   164,   163,   163,   162,   162,
-    162,   161,   161,   160,   160,   159,   159,   159,
-    158,   158,   157,   157,   156,   156,   156,   155,
-    155,   154,   154,   153,   153,   153,   152,   152,
-    151,   151,   151,   150,   150,   149,   149,   149,
-    148,   148,   147,   147,   147,   146,   146,   145,
-    145,   145,   144,   144,   143,   143,   143,   142,
-    142,   141,   141,   141,   140,   140,   140,   139,
-    139,   138,   138,   138,   137,   137,   137,   136,
-    136,   135,   135,   135,   134,   134,   134,   133,
-    133,   133,   132,   132,   131,   131,   131,   130,
-    130,   130,   129,   129,   129,   128,   128,   128,
-    127,   127,   126,   126,   126,   125,   125,   125,
-    124,   124,   124,   123,   123,   123,   122,   122,
-    122,   121,   121,   121,   120,   120,   120,   119,
-    119,   119,   119,   118,   118,   118,   117,   117,
-    117,   116,   116,   116,   115,   115,   115,   114,
-    114,   114,   113,   113,   113,   113,   112,   112,
-    112,   111,   111,   111,   110,   110,   110,   110,
-    109,   109,   109,   108,   108,   108,   107,   107,
-    107,   107,   106,   106,   106,   105,   105,   105,
-    105,   104,   104,   104,   103,   103,   103,   103,
-    102,   102,   102,   101,   101,   101,   101,   100,
-    100,   100,   100,    99,    99,    99,    99,    98,
-     98,    98,    97,    97,    97,    97,    96,    96,
-     96,    96,    95,    95,    95,    95,    94,    94,
-     94,    94,    93,    93,    93,    93,    92,    92,
-     92,    92,    91,    91,    91,    91,    90,    90,
-     90,    90,    89,    89,    89,    89,    88,    88,
-     88,    88,    87,    87,    87,    87,    86,    86,
-     86,    86,    86,    85,    85,    85,    85,    84,
-     84,    84,    84,    83,    83,    83,    83,    83,
-     82,    82,    82,    82,    81,    81,    81,    81,
-     81,    80,    80,    80,    80,    79,    79,    79,
-     79,    79,    78,    78,    78,    78,    78,    77,
-     77,    77,    77,    76,    76,    76,    76,    76,
-     75,    75,    75,    75,    75,    74,    74,    74,
-     74,    74,    73,    73,    73,    73,    73,    72,
-     72,    72,    72,    72,    71,    71,    71,    71,
-     71,    70,    70,    70,    70,    70,    70,    69,
-     69,    69,    69,    69,    68,    68,    68,    68,
-     68,    67,    67,    67,    67,    67,    67,    66,
-     66,    66,    66,    66,    65,    65,    65,    65,
-     65,    65,    64,    64,    64,    64,    64,    64,
-     63,    63,    63,    63,    63,    62,    62,    62,
-     62,    62,    62,    61,    61,    61,    61,    61,
-     61,    60,    60,    60,    60,    60,    60,    59,
-     59,    59,    59,    59,    59,    59,    58,    58,
-     58,    58,    58,    58,    57,    57,    57,    57,
-     57,    57,    56,    56,    56,    56,    56,    56,
-     56,    55,    55,    55,    55,    55,    55,    55,
-     54,    54,    54,    54,    54,    54,    53,    53,
-     53,    53,    53,    53,    53,    52,    52,    52,
-     52,    52,    52,    52,    51,    51,    51,    51,
-     51,    51,    51,    50,    50,    50,    50,    50,
-     50,    50,    50,    49,    49,    49,    49,    49,
-     49,    49,    48,    48,    48,    48,    48,    48,
-     48,    48,    47,    47,    47,    47,    47,    47,
-     47,    47,    46,    46,    46,    46,    46,    46,
-     46,    46,    45,    45,    45,    45,    45,    45,
-     45,    45,    44,    44,    44,    44,    44,    44,
-     44,    44,    43,    43,    43,    43,    43,    43,
-     43,    43,    43,    42,    42,    42,    42,    42,
-     42,    42,    42,    41,    41,    41,    41,    41,
-     41,    41,    41,    41,    40,    40,    40,    40,
-     40,    40,    40,    40,    40,    39,    39,    39,
-     39,    39,    39,    39,    39,    39,    39,    38,
-     38,    38,    38,    38,    38,    38,    38,    38,
-     37,    37,    37,    37,    37,    37,    37,    37,
-     37,    37,    36,    36,    36,    36,    36,    36,
-     36,    36,    36,    36,    35,    35,    35,    35,
-     35,    35,    35,    35,    35,    35,    35,    34,
-     34,    34,    34,    34,    34,    34,    34,    34,
-     34,    33,    33,    33,    33,    33,    33,    33,
-     33,    33,    33,    33,    32,    32,    32,    32,
-     32,    32,    32,    32,    32,    32,    32,    32,
-     31,    31,    31,    31,    31,    31,    31,    31,
-     31,    31,    31,    30,    30,    30,    30,    30,
-     30,    30,    30,    30,    30,    30,    30,    29,
-     29,    29,    29,    29,    29,    29,    29,    29,
-     29,    29,    29,    29,    28,    28,    28,    28,
-     28,    28,    28,    28,    28,    28,    28,    28,
-     28,    27,    27,    27,    27,    27,    27,    27,
-     27,    27,    27,    27,    27,    27,    26,    26,
-     26,    26,    26,    26,    26,    26,    26,    26,
-     26,    26,    26,    26,    25,    25,    25,    25,
-     25,    25,    25,    25,    25,    25,    25,    25,
-     25,    25,    25,    24,    24,    24,    24,    24,
-     24,    24,    24,    24,    24,    24,    24,    24,
-     24,    24,    23,    23,    23,    23,    23,    23,
-     23,    23,    23,    23,    23,    23,    23,    23,
-     23,    23,    22,    22,    22,    22,    22,    22,
-     22,    22,    22,    22,    22,    22,    22,    22,
-     22,    22,    21,    21,    21,    21,    21,    21,
-     21,    21,    21,    21,    21,    21,    21,    21,
-     21,    21,    21,    20,    20,    20,    20,    20,
-     20,    20,    20,    20,    20,    20,    20,    20,
-     20,    20,    20,    20,    20,    19,    19,    19,
-     19,    19,    19,    19,    19,    19,    19,    19,
-     19,    19,    19,    19,    19,    19,    19,    19,
-     18,    18,    18,    18,    18,    18,    18,    18,
-     18,    18,    18,    18,    18,    18,    18,    18,
-     18,    18,    18,    18,    17,    17,    17,    17,
-     17,    17,    17,    17,    17,    17,    17,    17,
-     17,    17,    17,    17,    17,    17,    17,    17,
-     17,    16,    16,    16,    16,    16,    16,    16,
-     16,    16,    16,    16,    16,    16,    16,    16,
-     16,    16,    16,    16,    16,    16,    16,    16,
-     15,    15,    15,    15,    15,    15,    15,    15,
-     15,    15,    15,    15,    15,    15,    15,    15,
-     15,    15,    15,    15,    15,    15,    15,    14,
-     14,    14,    14,    14,    14,    14,    14,    14,
-     14,    14,    14,    14,    14,    14,    14,    14,
-     14,    14,    14,    14,    14,    14,    14,    14,
-     14,    13,    13,    13,    13,    13,    13,    13,
-     13,    13,    13,    13,    13,    13,    13,    13,
-     13,    13,    13,    13,    13,    13,    13,    13,
-     13,    13,    13,    13,    12,    12,    12,    12,
-     12,    12,    12,    12,    12,    12,    12,    12,
-     12,    12,    12,    12,    12,    12,    12,    12,
-     12,    12,    12,    12,    12,    12,    12,    12,
-     12,    12,    11,    11,    11,    11,    11,    11,
-     11,    11,    11,    11,    11,    11,    11,    11,
-     11,    11,    11,    11,    11,    11,    11,    11,
-     11,    11,    11,    11,    11,    11,    11,    11,
-     11,    11,    10,    10,    10,    10,    10,    10,
-     10,    10,    10,    10,    10,    10,    10,    10,
-     10,    10,    10,    10,    10,    10,    10,    10,
-     10,    10,    10,    10,    10,    10,    10,    10,
-     10,    10,    10,    10,    10,     9,     9,     9,
-      9,     9,     9,     9,     9,     9,     9,     9,
-      9,     9,     9,     9,     9,     9,     9,     9,
-      9,     9,     9,     9,     9,     9,     9,     9,
-      9,     9,     9,     9,     9,     9,     9,     9,
-      9,     9,     9,     9,     8,     8,     8,     8,
-      8,     8,     8,     8,     8,     8,     8,     8,
-      8,     8,     8,     8,     8,     8,     8,     8,
-      8,     8,     8,     8,     8,     8,     8,     8,
-      8,     8,     8,     8,     8,     8,     8,     8,
-      8,     8,     8,     8,     8,     8,     8,     8,
-      7,     7,     7,     7,     7,     7,     7,     7,
-      7,     7,     7,     7,     7,     7,     7,     7,
-      7,     7,     7,     7,     7,     7,     7,     7,
-      7,     7,     7,     7,     7,     7,     7,     7,
-      7,     7,     7,     7,     7,     7,     7,     7,
-      7,     7,     7,     7,     7,     7,     7,     7,
-      7,     6,     6,     6,     6,     6,     6,     6,
-      6,     6,     6,     6,     6,     6,     6,     6,
-      6,     6,     6,     6,     6,     6,     6,     6,
-      6,     6,     6,     6,     6,     6,     6,     6,
-      6,     6,     6,     6,     6,     6,     6,     6,
-      6,     6,     6,     6,     6,     6,     6,     6,
-      6,     6,     6,     6,     6,     6,     6,     6,
-      6,     6,     5,     5,     5,     5,     5,     5,
-      5,     5,     5,     5,     5,     5,     5,     5,
-      5,     5,     5,     5,     5,     5,     5,     5,
-      5,     5,     5,     5,     5,     5,     5,     5,
-      5,     5,     5,     5,     5,     5,     5,     5,
-      5,     5,     5,     5,     5,     5,     5,     5,
-      5,     5,     5,     5,     5,     5,     5,     5,
-      5,     5,     5,     5,     5,     5,     5,     5,
-      5,     5,     5,     5,     5,     4,     4,     4,
-      4,     4,     4,     4,     4,     4,     4,     4,
-      4,     4,     4,     4,     4,     4,     4,     4,
-      4,     4,     4,     4,     4,     4,     4,     4,
-      4,     4,     4,     4,     4,     4,     4,     4,
-      4,     4,     4,     4,     4,     4,     4,     4,
-      4,     4,     4,     4,     4,     4,     4,     4,
-      4,     4,     4,     4,     4,     4,     4,     4,
-      4,     4,     4,     4,     4,     4,     4,     4,
-      4,     4,     4,     4,     4,     4,     4,     4,
-      4,     4,     4,     4,     4,     4,     4,     4,
-      3,     3,     3,     3,     3,     3,     3,     3,
-      3,     3,     3,     3,     3,     3,     3,     3,
-      3,     3,     3,     3,     3,     3,     3,     3,
-      3,     3,     3,     3,     3,     3,     3,     3,
-      3,     3,     3,     3,     3,     3,     3,     3,
-      3,     3,     3,     3,     3,     3,     3,     3,
-      3,     3,     3,     3,     3,     3,     3,     3,
-      3,     3,     3,     3,     3,     3,     3,     3,
-      3,     3,     3,     3,     3,     3,     3,     3,
-      3,     3,     3,     3,     3,     3,     3,     3,
-      3,     3,     3,     3,     3,     3,     3,     3,
-      3,     3,     3,     3,     3,     3,     3,     3,
-      3,     3,     3,     3,     3,     3,     3,     3,
-      3,     3,     2,     2,     2,     2,     2,     2,
-      2,     2,     2,     2,     2,     2,     2,     2,
-      2,     2,     2,     2,     2,     2,     2,     2,
-      2,     2,     2,     2,     2,     2,     2,     2,
-      2,     2,     2,     2,     2,     2,     2,     2,
-      2,     2,     2,     2,     2,     2,     2,     2,
-      2,     2,     2,     2,     2,     2,     2,     2,
-      2,     2,     2,     2,     2,     2,     2,     2,
-      2,     2,     2,     2,     2,     2,     2,     2,
-      2,     2,     2,     2,     2,     2,     2,     2,
-      2,     2,     2,     2,     2,     2,     2,     2,
-      2,     2,     2,     2,     2,     2,     2,     2,
-      2,     2,     2,     2,     2,     2,     2,     2,
-      2,     2,     2,     2,     2,     2,     2,     2,
-      2,     2,     2,     2,     2,     2,     2,     2,
-      2,     2,     2,     2,     2,     2,     2,     2,
-      2,     2,     2,     2,     2,     2,     2,     2,
-      2,     2,     2,     2,     2,     2,     2,     2,
-      2,     2,     2,     2,     2,     2,     2,     2,
-      1,     1,     1,     1,     1,     1,     1,     1,
-      1,     1,     1,     1,     1,     1,     1,     1,
-      1,     1,     1,     1,     1,     1,     1,     1,
-      1,     1,     1,     1,     1,     1,     1,     1,
-      1,     1,     1,     1,     1,     1,     1,     1,
-      1,     1,     1,     1,     1,     1,     1,     1,
-      1,     1,     1,     1,     1,     1,     1,     1,
-      1,     1,     1,     1,     1,     1,     1,     1,
-      1,     1,     1,     1,     1,     1,     1,     1,
-      1,     1,     1,     1,     1,     1,     1,     1,
-      1,     1,     1,     1,     1,     1,     1,     1,
-      1,     1,     1,     1,     1,     1,     1,     1,
-      1,     1,     1,     1,     1,     1,     1,     1,
-      1,     1,     1,     1,     1,     1,     1,     1,
-      1,     1,     1,     1,     1,     1,     1,     1,
-      1,     1,     1,     1,     1,     1,     1,     1,
-      1,     1,     1,     1,     1,     1,     1,     1,
-      1,     1,     1,     1,     1,     1,     1,     1,
-      1,     1,     1,     1,     1,     1,     1,     1,
-      1,     1,     1,     1,     1,     1,     1,     1,
-      1,     1,     1,     1,     1,     1,     1,     1,
-      1,     1,     1,     1,     1,     1,     1,     1,
-      1,     1,     1,     1,     1,     1,     1,     1,
-      1,     1,     1,     1,     1,     1,     1,     1,
-      1,     1,     1,     1,     1,     1,     1,     1,
-      1,     1,     1,     1,     1,     1,     1,     1,
-      1,     1,     1,     1,     1,     1,     1,     1,
-      1,     1,     1,     1,     1,     1,     1,     1,
-      1,     1,     1,     1,     1,     1,     1,     1,
-      1,     1,     1,     1,     1,     1,     1,     1,
-      1,     1,     1,     1,     1,     1,     1,     1,
-      1,     1,     1,     1,     1,     1,     1,     1,
 };
 const prog_uint16_t Fm4Op::env_to_attenuation_[256] PROGMEM = {
    3328,  2047,  1791,  1641,  1535,  1452,  1385,  1328,
@@ -887,8 +637,11 @@ inline void Voice::ProcessModulationMatrix() {
     }
     uint8_t source = patch_.modulation[i].source;
     uint8_t destination = patch_.modulation[i].destination;
-    uint8_t source_value = modulation_sources_[source];
     if (destination != MOD_DST_VCA) {
+      if (amount == 0) {
+        continue;  // adds nothing; most slots are unused
+      }
+      uint8_t source_value = modulation_sources_[source];
       int16_t modulation = dst_[destination];
       if ((source >= MOD_SRC_LFO_1 && source <= MOD_SRC_LFO_4) ||
            source == MOD_SRC_PITCH_BEND ||
@@ -902,6 +655,7 @@ inline void Voice::ProcessModulationMatrix() {
     } else {
       // The VCA modulation is multiplicative, not additive. Yet another
       // Special case :(.
+      uint8_t source_value = modulation_sources_[source];
       if (amount < 0) {
         amount = -amount;
         source_value = 255 - source_value;
@@ -986,21 +740,257 @@ inline void Voice::UpdateDestinations() {
 }
 
 /* static */
-void Voice::ExpandHalfRate() {
-  // The first half of render_.wide holds a block rendered at half the sample
-  // rate. Expand it in place, back to front, with the midpoint between
-  // neighbours: repeating samples would mirror the whole spectrum into
-  // 9.8-19.6 kHz as a high-end fizz on every note.
-  uint16_t* buffer = render_.wide;
-  static uint16_t previous = 2048;
-  uint16_t last = buffer[(kAudioBlockSize >> 1) - 1];
-  for (uint8_t i = kAudioBlockSize >> 1; i--; ) {
-    uint16_t current = buffer[i];
-    uint16_t before = i ? buffer[i - 1] : previous;
-    buffer[2 * i + 1] = current;
-    buffer[2 * i] = (before + current) >> 1;
+// The classic post-mix: noise mixed in, then the distortion table, then the
+// 8-bit result widened into the audio ring. PostMixC is the reference and
+// the host version; PostMixAsm writes into the ring directly (bench/
+// BENCH_PMTEST compares them).
+void Voice::PostMixC(const uint8_t* in, uint8_t noise, uint8_t signal_gain,
+                     uint8_t noise_gain, uint8_t post_dry, uint8_t post_wet) {
+  for (uint8_t i = 0; i < kAudioBlockSize;) {
+    uint8_t signal_noise_a, signal_noise_b;
+    noise = (noise * 73) + 1;
+    signal_noise_a = U8Mix(in[i++], noise, signal_gain, noise_gain);
+    uint8_t a = U8Mix(
+        signal_noise_a,
+        ResourcesManager::Lookup<uint8_t, uint8_t>(
+            wav_res_distortion, signal_noise_a),
+        post_dry, post_wet);
+    noise = (noise * 73) + 1;
+    signal_noise_b = U8Mix(in[i++], noise, signal_gain, noise_gain);
+    uint8_t b = U8Mix(
+        signal_noise_b,
+        ResourcesManager::Lookup<uint8_t, uint8_t>(
+            wav_res_distortion, signal_noise_b),
+        post_dry, post_wet);
+    // The classic engine is 8-bit: shift up to the DAC's 12 bits.
+    audio_buffer.Overwrite2(static_cast<uint16_t>(a) << 4,
+                            static_cast<uint16_t>(b) << 4);
   }
-  previous = last;
+}
+
+#ifdef __AVR__
+void Voice::PostMixAsm(const uint8_t* in, uint8_t noise, uint8_t signal_gain,
+                       uint8_t noise_gain, uint8_t post_dry, uint8_t post_wet) {
+  uint16_t* dst = &AudioRing::buffer_[AudioRing::write_ptr_];
+  uint8_t n = kAudioBlockSize;
+  uint8_t k73 = 73, sn, d, hi;
+  uint16_t lo;
+  // Y is gcc's frame pointer: saved by hand and used as the ring pointer.
+  asm volatile(
+    "push r28                 \n\t"
+    "push r29                 \n\t"
+    "movw r28, %A[dst]        \n\t"
+    "1:                       \n\t"
+    "mul  %[noise], %[k73]    \n\t"   /* noise = noise * 73 + 1 */
+    "mov  %[noise], r0        \n\t"
+    "inc  %[noise]            \n\t"
+    "ld   %[sn], X+           \n\t"   /* U8Mix(in, noise, sg, ng) */
+    "mul  %[sn], %[sg]        \n\t"
+    "movw %A[lo], r0          \n\t"
+    "mul  %[noise], %[ng]     \n\t"
+    "add  %A[lo], r0          \n\t"
+    "adc  %B[lo], r1          \n\t"
+    "mov  %[sn], %B[lo]       \n\t"
+    "mov  r30, %[sn]          \n\t"   /* d = distortion[sn] */
+    "ldi  r31, 0              \n\t"
+    "add  r30, %A[tbl]        \n\t"
+    "adc  r31, %B[tbl]        \n\t"
+    "lpm  %[d], Z             \n\t"
+    "mul  %[sn], %[dry]       \n\t"   /* a = U8Mix(sn, d, dry, wet) */
+    "movw %A[lo], r0          \n\t"
+    "mul  %[d], %[wet]        \n\t"
+    "add  %A[lo], r0          \n\t"
+    "adc  %B[lo], r1          \n\t"
+    "mov  %[d], %B[lo]        \n\t"
+    "mov  %[hi], %[d]         \n\t"   /* a << 4, two bytes */
+    "swap %[hi]               \n\t"
+    "andi %[hi], 0x0F         \n\t"
+    "swap %[d]                \n\t"
+    "andi %[d], 0xF0          \n\t"
+    "st   Y+, %[d]            \n\t"
+    "st   Y+, %[hi]           \n\t"
+    "cp   r28, %A[end]        \n\t"   /* wrap at the end of the ring */
+    "cpc  r29, %B[end]        \n\t"
+    "brne 2f                  \n\t"
+    "movw r28, %A[start]      \n\t"
+    "2: dec  %[n]             \n\t"
+    "brne 1b                  \n\t"
+    "eor  r1, r1              \n\t"
+    "pop  r29                 \n\t"
+    "pop  r28                 \n\t"
+    : [noise] "+a" (noise), [n] "+r" (n), [sn] "=&a" (sn), [d] "=&d" (d),
+      [lo] "=&r" (lo), [hi] "=&d" (hi), "+x" (in)
+    : [dst] "r" (dst), [sg] "a" (signal_gain), [ng] "a" (noise_gain),
+      [dry] "a" (post_dry), [wet] "a" (post_wet), [k73] "a" (k73),
+      [tbl] "r" (wav_res_distortion),
+      [end] "r" (&AudioRing::buffer_[128]), [start] "r" (AudioRing::buffer_)
+    : "r0", "r1", "r30", "r31", "cc", "memory");
+  AudioRing::write_ptr_ = (AudioRing::write_ptr_ + kAudioBlockSize) & 127;
+}
+#endif
+
+void Voice::PostMix(const uint8_t* in, uint8_t noise, uint8_t signal_gain,
+                    uint8_t noise_gain, uint8_t post_dry, uint8_t post_wet) {
+#ifdef __AVR__
+  PostMixAsm(in, noise, signal_gain, noise_gain, post_dry, post_wet);
+#else
+  PostMixC(in, noise, signal_gain, noise_gain, post_dry, post_wet);
+#endif
+}
+
+void Voice::ExpandHalfRateC() {
+  // The first half of render_.wide holds a block rendered at half the sample
+  // rate. The gap between s[n] and s[n+1] is filled with a 6-tap half-band
+  // interpolator, (35, -233, 1222, 1222, -233, 35) / 2048: it needs three
+  // samples of lookahead, so the output lags by six full-rate samples
+  // (150 us) and the last five inputs of each block wait in history. Images
+  // of a 3.5 kHz partial land 55 dB down (the previous four-point fit: 31),
+  // at 7 kHz 18 dB (10).
+  const uint8_t half = kAudioBlockSize >> 1;
+  const uint8_t kHistory = kExpandHistory;
+  static uint16_t history[kHistory] = { 2048, 2048, 2048, 2048, 2048 };
+  // Window: history, then this block's samples, which the engine rendered
+  // at wide[kHistory] onwards.
+  uint16_t* win = render_.wide;
+  memcpy(win, history, sizeof(history));
+  uint16_t out[kAudioBlockSize];
+  for (uint8_t n = 0; n < half; ++n) {
+    // s[n] = win[n + 2]; the pair s[n], s[n+1] is win[n+2], win[n+3]
+    const uint16_t* w = win + n;
+    int32_t acc = 1222L * (static_cast<int32_t>(w[2]) + w[3])
+                - 233L * (static_cast<int32_t>(w[1]) + w[4])
+                + 35L * (static_cast<int32_t>(w[0]) + w[5]);
+    int16_t y = static_cast<int16_t>(acc >> 11);
+    if (y < 0) y = 0; else if (y > 4095) y = 4095;
+    out[2 * n] = w[2];
+    out[2 * n + 1] = y;
+  }
+  memcpy(history, win + half, sizeof(history));
+  audio_buffer.WriteBlock(out, kAudioBlockSize);
+}
+
+#ifdef __AVR__
+// The same filter, written straight into the audio ring (wrapping at 128).
+// bench/ BENCH_EXPTEST checks it against ExpandHalfRateC.
+void Voice::ExpandHalfRateToRing() {
+  const uint8_t half = kAudioBlockSize >> 1;
+  const uint8_t kHistory = kExpandHistory;
+  static uint16_t history[kHistory] = { 2048, 2048, 2048, 2048, 2048 };
+  uint16_t* win = render_.wide;
+  memcpy(win, history, sizeof(history));
+  uint16_t* dst = &AudioRing::buffer_[AudioRing::write_ptr_];
+  uint8_t n = half;
+  uint16_t a, b, p;     // pair sum, scratch, product
+  uint32_t acc;
+  asm volatile(
+    "ldi  %B[p], 0            \n\t"   /* %B[p] stays 0: the carry register */
+    "1:                       \n\t"
+    /* s[n] = w[2]: first of the pair */
+    "ldd  %A[a], Z+4          \n\t"
+    "ldd  %B[a], Z+5          \n\t"
+    "st   X+, %A[a]           \n\t"
+    "st   X+, %B[a]           \n\t"
+    /* acc = 1222 * (w2 + w3): 1222 = 0x04C6 */
+    "ldd  %A[b], Z+6          \n\t"
+    "ldd  %B[b], Z+7          \n\t"
+    "add  %A[a], %A[b]        \n\t"
+    "adc  %B[a], %B[b]        \n\t"
+    "ldi  %A[p], 198          \n\t"   /* 1222 = 198 + 1024 */
+    "mul  %A[a], %A[p]        \n\t"
+    "movw %A[acc], r0         \n\t"
+    "clr  %C[acc]             \n\t"
+    "clr  %D[acc]             \n\t"
+    "mul  %B[a], %A[p]        \n\t"
+    "add  %B[acc], r0         \n\t"
+    "adc  %C[acc], r1         \n\t"
+    "adc  %D[acc], %B[p]      \n\t"
+    "lsl  %A[a]               \n\t"   /* + (sum << 10): sum << 2 at byte 1 */
+    "rol  %B[a]               \n\t"
+    "lsl  %A[a]               \n\t"
+    "rol  %B[a]               \n\t"
+    "add  %B[acc], %A[a]      \n\t"
+    "adc  %C[acc], %B[a]      \n\t"
+    "adc  %D[acc], %B[p]      \n\t"
+    /* acc -= 233 * (w1 + w4) */
+    "ldd  %A[a], Z+2          \n\t"
+    "ldd  %B[a], Z+3          \n\t"
+    "ldd  %A[b], Z+8          \n\t"
+    "ldd  %B[b], Z+9          \n\t"
+    "add  %A[a], %A[b]        \n\t"
+    "adc  %B[a], %B[b]        \n\t"
+    "ldi  %A[p], 0xE9         \n\t"
+    "mul  %A[a], %A[p]        \n\t"
+    "sub  %A[acc], r0         \n\t"
+    "sbc  %B[acc], r1         \n\t"
+    "sbc  %C[acc], %B[p]      \n\t"
+    "sbc  %D[acc], %B[p]      \n\t"
+    "mul  %B[a], %A[p]        \n\t"
+    "sub  %B[acc], r0         \n\t"
+    "sbc  %C[acc], r1         \n\t"
+    "sbc  %D[acc], %B[p]      \n\t"
+    /* acc += 35 * (w0 + w5) */
+    "ld   %A[a], Z            \n\t"
+    "ldd  %B[a], Z+1          \n\t"
+    "ldd  %A[b], Z+10         \n\t"
+    "ldd  %B[b], Z+11         \n\t"
+    "add  %A[a], %A[b]        \n\t"
+    "adc  %B[a], %B[b]        \n\t"
+    "ldi  %A[p], 35           \n\t"
+    "mul  %A[a], %A[p]        \n\t"
+    "add  %A[acc], r0         \n\t"
+    "adc  %B[acc], r1         \n\t"
+    "adc  %C[acc], %B[p]      \n\t"
+    "adc  %D[acc], %B[p]      \n\t"
+    "mul  %B[a], %A[p]        \n\t"
+    "add  %B[acc], r0         \n\t"
+    "adc  %C[acc], r1         \n\t"
+    "adc  %D[acc], %B[p]      \n\t"
+    "eor  r1, r1              \n\t"
+    /* y = acc >> 11, arithmetic: drop a byte, then three asr */
+    "mov  %A[a], %B[acc]      \n\t"
+    "mov  %B[a], %C[acc]      \n\t"
+    "mov  %A[b], %D[acc]      \n\t"
+    "asr  %A[b]               \n\t" "ror  %B[a]               \n\t" "ror  %A[a]               \n\t"
+    "asr  %A[b]               \n\t" "ror  %B[a]               \n\t" "ror  %A[a]               \n\t"
+    "asr  %A[b]               \n\t" "ror  %B[a]               \n\t" "ror  %A[a]               \n\t"
+    /* clip to 0..4095 (y is a 16-bit two's complement value in a) */
+    "sbrs %B[a], 7            \n\t"
+    "rjmp 2f                  \n\t"
+    "clr  %A[a]               \n\t"
+    "clr  %B[a]               \n\t"
+    "rjmp 3f                  \n\t"
+    "2: cpi  %B[a], 0x10      \n\t"
+    "brlo 3f                  \n\t"
+    "ldi  %A[a], 0xFF         \n\t"
+    "ldi  %B[a], 0x0F         \n\t"
+    "3: st   X+, %A[a]        \n\t"
+    "st   X+, %B[a]           \n\t"
+    "cpi  r26, lo8(%[end])    \n\t"   /* wrap at the end of the ring */
+    "ldi  %A[p], hi8(%[end])  \n\t"
+    "cpc  r27, %A[p]          \n\t"
+    "brne 4f                  \n\t"
+    "ldi  r26, lo8(%[start])  \n\t"
+    "ldi  r27, hi8(%[start])  \n\t"
+    "4: adiw r30, 2           \n\t"
+    "dec  %[n]                \n\t"
+    "breq 5f                  \n\t"   /* the loop is too long for brne */
+    "rjmp 1b                  \n\t"
+    "5:                       \n\t"
+    : [a] "=&d" (a), [b] "=&d" (b), [p] "=&d" (p), [acc] "=&r" (acc),
+      [n] "+r" (n), "+x" (dst), "+z" (win)
+    : [end] "i" (&AudioRing::buffer_[128]), [start] "i" (AudioRing::buffer_)
+    : "r0", "r1", "cc", "memory");
+  memcpy(history, render_.wide + half, sizeof(history));
+  AudioRing::write_ptr_ = (AudioRing::write_ptr_ + kAudioBlockSize) & 127;
+}
+#endif
+
+void Voice::ExpandHalfRate() {
+#ifdef __AVR__
+  ExpandHalfRateToRing();
+#else
+  ExpandHalfRateC();
+#endif
 }
 
 /* static */
@@ -1026,7 +1016,7 @@ inline void Voice::RenderOscillators() {
   if (engine != last_engine_) {
     last_engine_ = engine;
     switch (engine) {
-      case ENGINE_FM4OP:    fm4op_.Init(); break;
+      case ENGINE_FM4OP:    fm4op_.Init(); fm_last_pitch = 0x7FFF; break;
       case ENGINE_KS_PLUCK: karplus_.Init(); break;
       case ENGINE_WESTCOAST: westcoast_.Init(); break;
       default: break;
@@ -1042,21 +1032,30 @@ inline void Voice::RenderOscillators() {
     // padding[3]: FM transpose in semitones (TX81Z TRPS).
     int16_t fm_pitch =
         base_pitch + static_cast<int8_t>(patch_.padding[3]) * 128;
-    uint32_t base_increment =
-        ComputePhaseIncrementFine(fm_pitch) << kFmRateShift;
-
-    // Set up operator phase increments from patch fields.
-    // Coarse ratio is a TX81Z-style index (0-63) into the ratio table.
-    fm4op_.SetOperatorIncrement(0, base_increment,
-        static_cast<uint8_t>(patch_.osc[0].range), patch_.osc[0].detune);
-    fm4op_.SetOperatorIncrement(1, base_increment,
-        static_cast<uint8_t>(patch_.osc[1].range), patch_.osc[1].detune);
-    // Modulatable values come from the mod matrix (dst_), scaled 0-127.
-    fm4op_.SetOperatorIncrement(2, base_increment,
-        dst_[MOD_DST_MIX_BALANCE] >> 7, static_cast<int8_t>(patch_.mix_op));
-    fm4op_.SetOperatorIncrement(3, base_increment,
-        dst_[MOD_DST_MIX_PARAM] >> 7,
-        static_cast<int8_t>(patch_.mix_sub_osc_shape));
+    // The four increments only change with the pitch, ratios or detunes;
+    // recomputing them is five 32-bit multiplies a block.
+    uint8_t ratio[4] = {
+        static_cast<uint8_t>(patch_.osc[0].range),
+        static_cast<uint8_t>(patch_.osc[1].range),
+        static_cast<uint8_t>(dst_[MOD_DST_MIX_BALANCE] >> 7),
+        static_cast<uint8_t>(dst_[MOD_DST_MIX_PARAM] >> 7) };
+    uint8_t detune[4] = {
+        static_cast<uint8_t>(patch_.osc[0].detune),
+        static_cast<uint8_t>(patch_.osc[1].detune),
+        patch_.mix_op, patch_.mix_sub_osc_shape };
+    if (fm_pitch != fm_last_pitch || memcmp(ratio, fm_last_ratio, 4) ||
+        memcmp(detune, fm_last_detune, 4)) {
+      fm_last_pitch = fm_pitch;
+      memcpy(fm_last_ratio, ratio, 4);
+      memcpy(fm_last_detune, detune, 4);
+      uint32_t base_increment =
+          ComputePhaseIncrementFine(fm_pitch) << kFmRateShift;
+      // Coarse ratio is a TX81Z-style index (0-63) into the ratio table.
+      for (uint8_t i = 0; i < 4; ++i) {
+        fm4op_.SetOperatorIncrement(i, base_increment, ratio[i],
+                                    static_cast<int8_t>(detune[i]));
+      }
+    }
 
     // Extract operator waveforms from packed nibbles.
     uint8_t op_waveform[4];
@@ -1093,7 +1092,8 @@ inline void Voice::RenderOscillators() {
     uint16_t feedback_gain = Fm4Op::FeedbackGain(patch_.padding[0]);
 
     fm4op_.Render(algorithm, op_waveform, op_att, feedback_gain,
-                  render_.wide, kAudioBlockSize >> kFmRateShift);
+                  render_.wide + kExpandHistory, kAudioBlockSize >> kFmRateShift);
+    BENCH_MARK(2);
     if (kFmRateShift) {
       ExpandHalfRate();
     }
@@ -1126,7 +1126,7 @@ inline void Voice::RenderOscillators() {
         dst_[MOD_DST_MIX_NOISE] >> 7,                // stiffness
         dst_[MOD_DST_MIX_FUZZ] >> 7,                 // sustain
         U15ShiftRight7(dst_[MOD_DST_PARAMETER_2]),   // color (metallic)
-        render_.wide, kAudioBlockSize >> 1);
+        render_.wide + kExpandHistory, kAudioBlockSize >> 1);
     ExpandHalfRate();
 
     return;
@@ -1154,7 +1154,7 @@ inline void Voice::RenderOscillators() {
         dst_[MOD_DST_MIX_CRUSH] >> 7,                // sync amount
         modulation_sources_[MOD_SRC_ENV_1],          // env for env-to-fold
         ComputePhaseIncrementFine(wc_pitch) << 1,
-        render_.wide,
+        render_.wide + kExpandHistory,
         kAudioBlockSize >> 1);
     ExpandHalfRate();
 
@@ -1205,6 +1205,7 @@ inline void Voice::RenderOscillators() {
           increment,
           no_sync_,
           sync_state_,
+          patch_.mix_op == OP_SYNC,
           render_.narrow.osc1);
     } else {
       osc_2.Render(
@@ -1213,6 +1214,7 @@ inline void Voice::RenderOscillators() {
           increment,
           patch_.mix_op == OP_SYNC ? sync_state_ : no_sync_,
           dummy_sync_state_,
+          patch_.mix_op == OP_SYNC,
           render_.narrow.osc2);
     }
   }
@@ -1220,9 +1222,13 @@ inline void Voice::RenderOscillators() {
 
 /* static */
 void Voice::ProcessBlock() {
+  BENCH_MARK(0);
   LoadSources();
+  BENCH_MARK(5);
   ProcessModulationMatrix();
+  BENCH_MARK(6);
   UpdateDestinations();
+  BENCH_MARK(1);
   
   // Skip the oscillator rendering code if the VCA output has converged to
   // a small value.
@@ -1234,6 +1240,7 @@ void Voice::ProcessBlock() {
   }
 
   RenderOscillators();
+  BENCH_MARK(3);
 
   uint8_t is_fm4op = (patch_.padding[2] == ENGINE_FM4OP);
   uint8_t is_special = is_fm4op ||
@@ -1305,9 +1312,13 @@ void Voice::ProcessBlock() {
       break;
   }
   
-  // Mix-in sub oscillator or transient generator.
+  // Mix-in sub oscillator or transient generator. At zero gain the mix is
+  // sample * 255/256, so skipping it costs one LSB of level: not worth
+  // 1,800 cycles a block.
   uint8_t sub_gain = U15ShiftRight7(dst_[MOD_DST_MIX_SUB_OSC]);
-  if (patch_.mix_sub_osc_shape < WAVEFORM_SUB_OSC_CLICK) {
+  if (sub_gain == 0) {
+    // nothing to mix in
+  } else if (patch_.mix_sub_osc_shape < WAVEFORM_SUB_OSC_CLICK) {
     sub_osc.Render(patch_.mix_sub_osc_shape, render_.narrow.osc1, sub_gain);
   } else {
     sub_gain <<= 1;
@@ -1318,10 +1329,7 @@ void Voice::ProcessBlock() {
   // Post-mix processing.
   if (is_special) {
     // In FM4OP/KS mode, skip noise/fuzz post-processing.
-    // Write directly to audio buffer.
-    for (uint8_t i = 0; i < kAudioBlockSize; i += 2) {
-      audio_buffer.Overwrite2(render_.wide[i], render_.wide[i + 1]);
-    }
+    // ExpandHalfRate (C or assembly) has already written the block out.
   } else {
     uint8_t noise = Random::state_msb();
     uint8_t noise_gain = U15ShiftRight7(dst_[MOD_DST_MIX_NOISE]);
@@ -1329,30 +1337,22 @@ void Voice::ProcessBlock() {
     uint8_t post_wet = U14ShiftRight6(dst_[MOD_DST_MIX_FUZZ]);
     uint8_t post_dry = ~post_wet;
 
-    // Mix with noise, and apply distortion. The loop processes samples by 2 to
-    // avoid some of the overhead of audio_buffer.Overwrite()
-    for (uint8_t i = 0; i < kAudioBlockSize;) {
-      uint8_t signal_noise_a, signal_noise_b;
-      noise = (noise * 73) + 1;
-      signal_noise_a = U8Mix(render_.narrow.osc1[i++], noise, signal_gain, noise_gain);
-      uint8_t a = U8Mix(
-          signal_noise_a,
-          ResourcesManager::Lookup<uint8_t, uint8_t>(
-              wav_res_distortion, signal_noise_a),
-          post_dry, post_wet);
-
-      noise = (noise * 73) + 1;
-      signal_noise_b = U8Mix(render_.narrow.osc1[i++], noise, signal_gain, noise_gain);
-      uint8_t b = U8Mix(
-            signal_noise_b,
-            ResourcesManager::Lookup<uint8_t, uint8_t>(
-                wav_res_distortion, signal_noise_b),
-            post_dry, post_wet);
-      // The classic engine is 8-bit: shift up to the DAC's 12 bits.
-      audio_buffer.Overwrite2(static_cast<uint16_t>(a) << 4,
-                              static_cast<uint16_t>(b) << 4);
+    if (noise_gain == 0 && post_wet == 0) {
+      // Nothing to mix in: the loop below cost 7,400 cycles per block for
+      // two multiplies by 255/256. Widen the 8-bit block in place (back to
+      // front, so wide[i] never lands on an unread narrow sample) and copy.
+      for (uint8_t i = kAudioBlockSize; i--; ) {
+        render_.wide[i] = static_cast<uint16_t>(render_.narrow.osc1[i]) << 4;
+      }
+      audio_buffer.WriteBlock(render_.wide, kAudioBlockSize);
+      BENCH_MARK(4);
+      return;
     }
+
+    PostMix(render_.narrow.osc1, noise, signal_gain, noise_gain,
+            post_dry, post_wet);
   }
+  BENCH_MARK(4);
 }
 
 }  // namespace ambika

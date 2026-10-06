@@ -18,7 +18,7 @@
 namespace ambika {
 
 /* static */
-RingBuffer<InputBufferSpecs> VoicecardProtocolRx::buffer_;
+VoicecardProtocolRx::RxRing VoicecardProtocolRx::buffer_;
 
 /* static */
 uint8_t VoicecardProtocolRx::command_;

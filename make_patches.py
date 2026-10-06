@@ -106,14 +106,64 @@ def make_riff_patch(patch_data, name):
     return struct.pack('<4sI', b'RIFF', len(body)) + body
 
 
+# Part settings for generated programs. A program is a patch plus the part it
+# is played with, so these ride along with every factory sound: neutral, at
+# pitch, polyphonic, arpeggiator off. Layout is PartData in controller/part.h.
+POLY = 1
+PART_DATA = struct.pack(
+    '<BbbBBBBBBBBBB7s',
+    120,          # volume
+    0,            # octave - at pitch (a stock program had -1 here)
+    0,            # tuning
+    0,            # tuning spread
+    0,            # raga
+    0,            # legato
+    0,            # portamento time
+    0,            # arp / sequencer mode: off
+    0,            # arp direction
+    1,            # arp octave
+    0,            # arp pattern
+    10,           # arp divider
+    POLY,         # polyphony mode
+    b'\x00' * 7,  # padding
+)
+assert len(PART_DATA) == 20, len(PART_DATA)
+
+
+def make_riff_program(patch_data, part_data, name):
+    """Wrap patch + part data in Ambika RIFF program format.
+
+    Byte 0 of a chunk's position word is the wire object id: 1 is a patch and
+    3 is a part (2 is the removed sequence slot, which Storage::RIFFWriteObject
+    shifts past). Storage::ForEachObject writes a program as patch then part.
+    """
+    name_bytes = name.encode('ascii')[:16].ljust(16, b'\x00')
+    name_chunk = struct.pack('<4sI', b'name', 16) + name_bytes
+    patch_chunk = (struct.pack('<4sI', b'obj ', len(patch_data) + 4)
+                   + struct.pack('<BBBB', 1, 0, 0, 0) + patch_data)
+    part_chunk = (struct.pack('<4sI', b'obj ', len(part_data) + 4)
+                  + struct.pack('<BBBB', 3, 0, 0, 0) + part_data)
+    body = b'MBKS' + name_chunk + patch_chunk + part_chunk
+    return struct.pack('<4sI', b'RIFF', len(body)) + body
+
+
 def save_patch(outdir, bank, slot, name, patch_data):
-    """Save a patch to the right directory."""
+    """Write the patch to /PATCH/BANK and the same sound to /PROGRAM/BANK.
+
+    The library page opens on programs - Library::location_ is initialised to
+    STORAGE_OBJECT_PROGRAM - so content shipped only as patches does not show
+    up until the user presses S1 to change what is browsed. Ship both.
+    """
     bank_dir = os.path.join(outdir, 'PATCH', 'BANK', bank)
     os.makedirs(bank_dir, exist_ok=True)
-    outpath = os.path.join(bank_dir, f'{slot:03d}.PAT')
-    riff = make_riff_patch(patch_data, name)
-    with open(outpath, 'wb') as f:
-        f.write(riff)
+    with open(os.path.join(bank_dir, f'{slot:03d}.PAT'), 'wb') as f:
+        f.write(make_riff_patch(patch_data, name))
+
+    prog_dir = os.path.join(outdir, 'PROGRAM', 'BANK', bank)
+    os.makedirs(prog_dir, exist_ok=True)
+    with open(os.path.join(prog_dir, f'{slot:03d}.PRO'), 'wb') as f:
+        f.write(make_riff_program(patch_data, PART_DATA, name))
+
     print(f'  {bank}{slot:02d} - {name.strip()}')
 
 
