@@ -106,9 +106,28 @@ def make_riff_patch(patch_data, name):
     return struct.pack('<4sI', b'RIFF', len(body)) + body
 
 
-# Part settings for generated programs, copied from a stock Ambika factory
-# program. A program is a patch plus the part settings it is played with.
-PART_DATA = bytes.fromhex('78ff0000000000000001000a0100000000000000')
+# Part settings for generated programs. A program is a patch plus the part it
+# is played with, so these ride along with every factory sound: neutral, at
+# pitch, polyphonic, arpeggiator off. Layout is PartData in controller/part.h.
+POLY = 1
+PART_DATA = struct.pack(
+    '<BbbBBBBBBBBBB7s',
+    120,          # volume
+    0,            # octave - at pitch (a stock program had -1 here)
+    0,            # tuning
+    0,            # tuning spread
+    0,            # raga
+    0,            # legato
+    0,            # portamento time
+    0,            # arp / sequencer mode: off
+    0,            # arp direction
+    1,            # arp octave
+    0,            # arp pattern
+    10,           # arp divider
+    POLY,         # polyphony mode
+    b'\x00' * 7,  # padding
+)
+assert len(PART_DATA) == 20, len(PART_DATA)
 
 
 def make_riff_program(patch_data, part_data, name):
