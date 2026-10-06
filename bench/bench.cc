@@ -32,47 +32,15 @@ PwmOutput<kPinVcfCutoffOut> vcf_cutoff_out;
 PwmOutput<kPinVcfResonanceOut> vcf_resonance_out;
 PwmOutput<kPinVcaOut> vca_out;
 ParallelPort<PortC, PARALLEL_TRIPLE_LOW> vcf_mode;
-Gpio<PortB, 0> log_vca;
-UartSpiMaster<UartSpiPort0, Gpio<PortD, 2>, 2> dac_interface;
-static uint8_t update_vca;
-static const uint8_t dac_scale = 16;
 volatile uint16_t isr_count = 0;
 volatile uint16_t underruns = 0;
 
 // Timer1 CTC at 510 cycles stands in for the Timer2 overflow (simavr does not
 // fire the phase-correct overflow); same period as the real audio ISR.
 ISR(TIMER1_COMPA_vect) {
-  static uint8_t sample_counter = 0;
-  static Word vca_12bits;
   ++isr_count;
-  if (update_vca) {
-    dac_interface.Strobe();
-    update_vca = 0;
-    dac_interface.Overwrite(vca_12bits.bytes[1]);
-    dac_interface.Overwrite(vca_12bits.bytes[0]);
-    dac_interface.Wait();
-    uint16_t next_vca_value;
-    if (log_vca.is_low()) {
-      next_vca_value = ambika::ResourcesManager::Lookup<uint16_t, uint8_t>(
-          lut_res_vca_linearization, voice.vca());
-    } else {
-      next_vca_value = voice.vca() * dac_scale;
-    }
-    vca_12bits.value = next_vca_value | 0x1000;
-  }
   if (!audio_buffer.readable()) ++underruns;
-  uint16_t sample = audio_buffer.ImmediateRead();
-  if (++sample_counter >= voice.crush()) {
-    dac_interface.Strobe();
-    sample_counter = 0;
-    Word sample_12bits;
-    sample_12bits.value = sample | 0x9000;
-    dac_interface.Overwrite(sample_12bits.bytes[1]);
-    dac_interface.Overwrite(sample_12bits.bytes[0]);
-  }
-#ifdef BENCH_RX
-  voicecard_rx.Receive();
-#endif
+  AudioOutTick();
 }
 
 static const uint8_t kBlocks = 8;
@@ -122,7 +90,7 @@ int main(void) {
 #else
     audio_buffer.Flush();
 #endif
-    voice.ProcessBlock(); update_vca = 1;
+    voice.ProcessBlock(); AudioOutUpdateVca();
   }
   dbg_vca = voice.vca(); dbg_env2 = voice.modulation_source(MOD_SRC_ENV_2);
   dbg_engine = voice.mutable_patch_data()[106]; dbg_rx = voicecard_rx.writable();
@@ -147,10 +115,8 @@ int main(void) {
 #endif
     vcf_cutoff_out.Write(voice.cutoff());
     vcf_resonance_out.Write(voice.resonance());
-    update_vca = 1;
-#ifdef BENCH_RX
+    AudioOutUpdateVca();
     voicecard_rx.Process();
-#endif
   }
   done = 1;
   bench_done();

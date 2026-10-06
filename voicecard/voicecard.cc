@@ -42,44 +42,8 @@ PwmOutput<kPinVcaOut> vca_out;
 
 ParallelPort<PortC, PARALLEL_TRIPLE_LOW> vcf_mode;
 
-Gpio<PortB, 0> log_vca;
-
-UartSpiMaster<UartSpiPort0, Gpio<PortD, 2>, 2> dac_interface;
-
-static uint8_t update_vca;
-static const uint8_t dac_scale = 16;
-
 ISR(TIMER2_OVF_vect) {
-  static uint8_t sample_counter = 0;
-  static Word vca_12bits;
-  
-  if (update_vca) {
-    dac_interface.Strobe();
-    update_vca = 0;
-    dac_interface.Overwrite(vca_12bits.bytes[1]);
-    dac_interface.Overwrite(vca_12bits.bytes[0]);
-    dac_interface.Wait();
-    uint16_t next_vca_value;
-    if (log_vca.is_low()) {
-      next_vca_value = ambika::ResourcesManager::Lookup<uint16_t, uint8_t>(
-          lut_res_vca_linearization,
-          voice.vca());
-    } else {
-      next_vca_value = voice.vca() * dac_scale;
-    }
-    vca_12bits.value = next_vca_value | 0x1000;
-  }
-  
-  uint16_t sample = audio_buffer.ImmediateRead();  // 12 bits
-  if (++sample_counter >= voice.crush()) {
-    dac_interface.Strobe();
-    sample_counter = 0;
-    Word sample_12bits;
-    sample_12bits.value = sample | 0x9000;
-    dac_interface.Overwrite(sample_12bits.bytes[1]);
-    dac_interface.Overwrite(sample_12bits.bytes[0]);
-  }
-  voicecard_rx.Receive();
+  AudioOutTick();
 }
 
 // This GPIO is used during development for timing code.
@@ -141,7 +105,7 @@ int main(void) {
       vcf_cutoff_out.Write(voice.cutoff());
       vcf_resonance_out.Write(voice.resonance());
       vcf_mode.Write(filter_mode_bytes[voice.patch().filter[0].mode]);
-      update_vca = 1;
+      AudioOutUpdateVca();
     }
     voicecard_rx.Process();
   }

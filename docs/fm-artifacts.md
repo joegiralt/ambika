@@ -39,14 +39,17 @@ the FFT peak land on a comb line, which is why the capture read 245 Hz for A3.
 
 ### Cycle budget, measured in simavr (`bench/`)
 
-Budget per block: 40 samples × 510 cycles = **20,400**. The audio ISR costs
-about **154 cycles per sample, 6,200 per block** (19 push/pop pairs, two SPI
-byte writes with a UDRE wait, the VCA update once per block). That leaves
-about **14,200 cycles for `ProcessBlock`**. Nothing fits:
+Budget per block: 40 samples × 510 cycles = **20,400**. The audio ISR cost
+about **157 cycles per sample, 6,300 per block** (17 push/pop pairs because
+of two non-inlined Strobe calls and a multiply, the VCA lookup once per
+block). Made a leaf on 6 Oct (`AudioOutTick` in `voicecard/audio_out.h`: VCA
+lookup moved to the main loop, chip select strobed directly): **~122 cycles
+per sample, 4,900 per block**, 9 push/pop pairs, no calls. That leaves about
+**15,500 cycles for `ProcessBlock`**. Nothing fits:
 
 | patch | ProcessBlock | wall per block with ISR | over |
 |---|---|---|---|
-| FM bare sine | 19,000 | 27,200 | 33 % |
+| FM bare sine | 19,000 | 27,500 (25,000 with the leaner ISR) | 33 % (23 %) |
 | FM, four carriers | 19,350 | 27,600 | 35 % |
 | classic sine | 16,560 | 23,600 | 16 % |
 | T078 LatelyBass | 20,500 | 29,500 | 45 % |
@@ -61,9 +64,9 @@ in the noise/fuzz post-mix loop with both at zero.
 So the FM engine needs to lose about 5,000 cycles per block (25 %), or the
 ISR must get cheaper, or both. Levers, biggest first:
 
-- ISR: 154 → ~60 cycles by avoiding the register-heavy prologue (naked ISR
-  with a small register set, no calls, VCA DAC write moved out of the ISR
-  under `cli`). Worth ~3,500 per block for every engine.
+- ISR: done, 157 → ~122 cycles; what remains is the interrupt entry and
+  exit, nine register saves and the ring buffer and SPI accesses. An
+  assembly ISR might reach ~90. Not yet heard on hardware.
 - `Fm4Op::Render`: 150 cycles per operator-sample. Skip operators whose
   attenuation is `kFmSilent` before the table lookups; the 32-bit phase
   accumulate and two PROGMEM lookups are the rest.
