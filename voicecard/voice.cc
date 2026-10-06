@@ -28,6 +28,14 @@
 using namespace avrlib;
 
 namespace ambika {
+// Cycle profile hooks for bench/ (empty in the firmware build).
+#ifdef BENCH_PROFILE
+extern volatile uint16_t bench_mark[6];
+#define BENCH_MARK(i) bench_mark[i] = TCNT1
+#else
+#define BENCH_MARK(i)
+#endif
+
 
 /* extern */
 Voice voice;
@@ -1118,6 +1126,7 @@ inline void Voice::RenderOscillators() {
 
     fm4op_.Render(algorithm, op_waveform, op_att, feedback_gain,
                   render_.wide, kAudioBlockSize >> kFmRateShift);
+    BENCH_MARK(2);
     if (kFmRateShift) {
       ExpandHalfRate();
     }
@@ -1244,9 +1253,11 @@ inline void Voice::RenderOscillators() {
 
 /* static */
 void Voice::ProcessBlock() {
+  BENCH_MARK(0);
   LoadSources();
   ProcessModulationMatrix();
   UpdateDestinations();
+  BENCH_MARK(1);
   
   // Skip the oscillator rendering code if the VCA output has converged to
   // a small value.
@@ -1258,6 +1269,7 @@ void Voice::ProcessBlock() {
   }
 
   RenderOscillators();
+  BENCH_MARK(3);
 
   uint8_t is_fm4op = (patch_.padding[2] == ENGINE_FM4OP);
   uint8_t is_special = is_fm4op ||
@@ -1377,6 +1389,7 @@ void Voice::ProcessBlock() {
                               static_cast<uint16_t>(b) << 4);
     }
   }
+  BENCH_MARK(4);
 }
 
 }  // namespace ambika

@@ -5,114 +5,107 @@ repo has no issue tracker.
 
 ## The complaint
 
-Held FM notes have audible inharmonic content underneath them. Described from
-the hardware as a hiss, then more precisely as **a rattle, like a guitar string
-too loose buzzing against the frets**. It is there on a bare sine operator with
-no modulation, at every pitch, and it needs the VCF closed past the midpoint to
-disappear — by which point the patch is unusably dull.
+Held FM notes have audible inharmonic content underneath them: **a rattle,
+like a guitar string too loose buzzing against the frets**. It is there on a
+bare sine operator with no modulation, at every pitch, and it needs the VCF
+closed past the midpoint to disappear.
 
-It is present on every Carcosa release so far. It is not the patch conversion:
-a single sine operator with nothing routed anywhere shows it.
+## Cause, measured on the hardware — CPU overrun, not DSP
 
-## Two causes, measured
+Captured 6 Oct 2026 from the synth's analog output (MOTU input 5) while
+driving it over MIDI with `utils/ambika_midi.py`: a bare sine operator
+(algorithm 1, op1 only, W1, ratio 1.00, level 127, filter open) held at
+A2, A3 and A5, plus a classic-engine sine.
 
-Use `voicecard/test/analyze.sh` to reproduce any of this.
+The sine is clean between events, but about **128 times a second a 1.5 ms
+chunk of 3.3 ms-old audio is played again** — a fifth of the time is stale
+buffer. It does not depend on pitch, on patch loads, or on parameter traffic.
+Spectrally that is a comb at the lap rate around every component, which is
+the rattle; the earlier "phase truncation" reading of host renders was wrong
+about the cause (the −58 dBc spurs exist, but they are 50 dB under this).
 
-### 1. Half-rate reconstruction imaging — FIXED
+| held note | glitches/s | each | stale audio |
+|---|---|---|---|
+| FM sine A2 / A3 / A5 | 108–129 | 0.9–1.6 ms | 9–20 % |
+| classic sine A3 | 164 | 4 ms | 65 % |
 
-FM and Karplus-Strong render at half the sample rate. `Voice::ExpandHalfRate`
-filled the gaps with the midpoint of two neighbours, which leaves the image at
-(19.6 kHz − f) only about 10 dB down. Every FM component between 5 and 9 kHz
-got a loud inharmonic twin between 10 and 14 kHz.
+Mechanism, in `voicecard/voicecard.cc`: the audio ISR calls
+`audio_buffer.ImmediateRead()` every sample with no underrun check. When
+`Voice::ProcessBlock` takes longer than 40 sample periods the ISR laps the
+128-sample ring buffer and replays whatever is there; `writable()` then wraps
+and the writer thinks it has room, so the two chase each other and every lap
+is a burst of old samples. The pitch between bursts is right; the chunks make
+the FFT peak land on a comb line, which is why the capture read 245 Hz for A3.
 
-Replaced with a four-point fit over the three previous samples and the current
-one — causal, so no lookahead, no delay, no block-boundary special case.
-Measured through `Voice::ProcessBlock`, old against new:
+### Cycle budget, measured in simavr (`bench/`)
 
-| note | midpoint | four-point | gain |
-|------|----------|------------|------|
-| 440 Hz | −54.2 dBc | −55.8 dBc | +1.6 dB |
-| 880 Hz | −45.7 dBc | −55.8 dBc | +10.1 dB |
-| 1761 Hz | −33.9 dBc | −52.1 dBc | +18.2 dB |
+Budget per block: 40 samples × 510 cycles = **20,400**. The audio ISR costs
+about **154 cycles per sample, 6,200 per block** (19 push/pop pairs, two SPI
+byte writes with a UDRE wait, the VCA update once per block). That leaves
+about **14,200 cycles for `ProcessBlock`**. Nothing fits:
 
-On hardware this was judged "slightly better" — real, but not the complaint.
+| patch | ProcessBlock | wall per block with ISR | over |
+|---|---|---|---|
+| FM bare sine | 19,000 | 27,200 | 33 % |
+| FM, four carriers | 19,350 | 27,600 | 35 % |
+| classic sine | 16,560 | 23,600 | 16 % |
+| T078 LatelyBass | 20,500 | 29,500 | 45 % |
+| T013 DynoWurlie | — | 29,800 | 46 % |
 
-### 2. Phase truncation — OPEN
+Where the FM sine's 19,000 go: control rate (matrix, 7 envelopes) 3,450;
+`Fm4Op::Render`, 20 half-rate samples × 4 operators, **11,970** (≈150 per
+operator-sample, silent operators included); `ExpandHalfRate` four-point fit
+2,440; writing the block 1,090. The classic sine spends 7,670 of its 16,560
+in the noise/fuzz post-mix loop with both at zero.
 
-`Fm4Op::Operator` indexes the waveform with a 10-bit phase. Truncating there
-leaves **discrete, inharmonic spurs** at about −56 to −60 dBc, spread across the
-spectrum and unrelated to the fundamental — a 110 Hz sine throws a spur at
-5010 Hz. Inharmonic partials beating against a held note is exactly a rattle,
-and it explains why it is inaudible on short notes and obvious on held ones.
+So the FM engine needs to lose about 5,000 cycles per block (25 %), or the
+ISR must get cheaper, or both. Levers, biggest first:
 
-This is the remaining artifact. The four-point fix above does not touch it.
+- ISR: 154 → ~60 cycles by avoiding the register-heavy prologue (naked ISR
+  with a small register set, no calls, VCA DAC write moved out of the ISR
+  under `cli`). Worth ~3,500 per block for every engine.
+- `Fm4Op::Render`: 150 cycles per operator-sample. Skip operators whose
+  attenuation is `kFmSilent` before the table lookups; the 32-bit phase
+  accumulate and two PROGMEM lookups are the rest.
+- `ExpandHalfRate`: the four-point fit costs 2,440; midpoint was cheaper.
+- Classic: skip the noise/fuzz loop when both gains are zero (~6,000).
+- A cheap guard in the ISR (`readable()` check, repeat the last sample) would
+  stop the rattle turning into stale chunks, but with a steady overrun it just
+  becomes a pitch drop; it is not a fix.
 
-## Candidate fix, not yet accepted
+Not verified: the ISR cost on hardware (simavr's USART timing), and that
+`Voice::ProcessBlock` in simavr matches the chip cycle for cycle; the lap rate
+predicted from the bench (~33 % late) matches the captured 20 % stale audio
+within the crude model, which is as close as this gets without a scope.
 
-Phase dither, behind `FM_PHASE_DITHER` in `voicecard/fm4op.h`. A 16-bit Galois
-LFSR dithers the truncation, trading the discrete spurs for broadband noise at
-the same total power:
+## Also present, lower priority
 
-| tone | without dither | with dither |
-|------|----------------|-------------|
-| 110 Hz | −59.3 dBc | −76.5 dBc |
-| 1758 Hz | −60.0 dBc | −76.9 dBc |
-| 7034 Hz | −56.3 dBc | −77.4 dBc |
-
-About 17–21 dB off the worst discrete spur, for 2.6 dB more broadband noise.
-
-**Not enabled in the firmware build.** What is still unknown:
-
-- Whether it actually sounds better. Rendered A/B did not settle it, because
-  the renders lack the analog filter and did not sound enough like the synth.
-- **CPU cost.** Four LFSR steps per sample on the voicecard, which is already
-  the busiest part of the system. Flash looks like roughly 94 bytes against
-  1180 free; cycles are the real question and have not been measured.
-
-If dither is rejected, the other lever is real phase resolution: interpolating
-the log-sine lookup, or a larger table. Roughly 512 bytes for about 6 dB, which
-is a poor trade compared to dither — but it removes energy instead of spreading
-it.
-
-## Next step
-
-Capture the synth's real analog output on a machine with a sound card, driving
-it over MIDI, and analyse that instead of host renders. That closes the gap the
-rendered A/B could not: the VCF, VCA and output stage are hardware and are not
-modelled anywhere in these tools, so everything measured here is drier and more
-exposed than what comes out of the synth.
-
-Worth capturing, per build:
-
-- a bare sine operator held at several pitches, filter wide open
-- `T013 A14 DynoWurlie` (low ratios, was judged clean)
-- `T078 C15 LatelyBass` and `T127 D32 Efem Toms` (bright, worst case)
-- the same notes with the VCF at the position where the rattle disappears
+1. **Half-rate imaging** — fixed with the four-point reconstruction fit
+   (−52 to −56 dBc). On hardware judged "slightly better".
+2. **Phase truncation** in `Fm4Op::Operator` (10-bit waveform index): discrete
+   spurs at −56 to −60 dBc. `FM_PHASE_DITHER` in `voicecard/fm4op.h` trades
+   them for broadband noise; it costs cycles, so it waits on the budget above.
+3. `MOD_TRIM` in `make_patches.py` (modulator levels −4.5 dB) is a voicing
+   decision, untouched.
 
 ## Tools
 
 ```sh
-# spur and SNR of one sine operator through the real Fm4Op code
+# drive the synth and capture (MOTU input 5 = channel index 4)
+python3 utils/ambika_midi.py load_sine; python3 utils/ambika_midi.py note_on 57 127
+pw-record --target <node> --channels 20 --rate 48000 --format s32 x.wav
+python3 utils/glitch_count.py x.wav 1.0,3.5,sine57
+
+# cycle bench in simavr (docker image avr-bench: gcc-avr simavr gdb-avr)
+sh bench/run.sh patch_sine 57                      # wall cycles with the ISR
+sh bench/run.sh patch_sine 57 "-DBENCH_NOISR -DBENCH_PROFILE"   # ProcessBlock split
+BUILD_ROOT=build_x/ sh bench/run.sh patch_lately 45   # parallel runs need their own build dir
+
+# host-side spur / SNR analysis and patch renders (dry: no VCF, VCA, output stage)
 sh voicecard/test/analyze.sh noise
-sh voicecard/test/analyze.sh noise -DFM_PHASE_DITHER
-
-# render real factory patches to a WAV through Voice::ProcessBlock
-sh voicecard/test/analyze.sh render out.wav PATCH/BANK/T/013.PAT 57 \
-                                         PATCH/BANK/T/078.PAT 45
-
-# the patch files come from
-python3 make_patches.py /tmp/patches
+sh voicecard/test/analyze.sh render out.wav PATCH/BANK/T/078.PAT 45
 ```
 
-Both build the real firmware sources. `voicecard/test/run.sh` still runs the
-correctness tests and should stay green.
-
-## Also unresolved
-
-`Voice::ExpandHalfRate`'s gain at 7 kHz is only about 2 dB — near Nyquist for
-the half-rate render, no reconstruction filter helps much. Bright voices with
-real energy up there will always image. Lowering modulator levels reduces it at
-the source; `MOD_TRIM` in `make_patches.py` is the lever, currently 6 steps
-(4.5 dB) applied flat to every modulator. Weighting it by the operator's
-frequency ratio would target the voices that actually alias and leave low-ratio
-voices like DynoWurlie alone. Not attempted — it is a voicing decision.
+`bench/` links the real voicecard sources; `BENCH_PROFILE` enables the
+`BENCH_MARK` hooks in `voicecard/voice.cc`, which are empty in the firmware
+build. `voicecard/test/run.sh` stays green.
