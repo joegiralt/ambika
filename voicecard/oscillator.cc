@@ -37,6 +37,19 @@ namespace ambika {
   phase = U24AddC(phase, phase_increment_int); \
   *sync_output++ = phase.carry; \
 
+// Without hard sync there is no sync input to test and no carry to write:
+// about 8 cycles a sample for each oscillator.
+#define BEGIN_SAMPLE_LOOP_NOSYNC \
+  uint24c_t phase; \
+  uint24_t phase_increment_int; \
+  phase_increment_int.integral = phase_increment_.integral; \
+  phase_increment_int.fractional = phase_increment_.fractional; \
+  phase.integral = phase_.integral; \
+  phase.fractional = phase_.fractional; \
+  uint8_t size = kAudioBlockSize; \
+  while (size--) { \
+    phase = U24AddC(phase, phase_increment_int);
+
 #define BEGIN_SAMPLE_LOOP \
   uint24c_t phase; \
   uint24_t phase_increment_int; \
@@ -142,7 +155,17 @@ void Oscillator::RenderSimpleWavetable(uint8_t* buffer) {
   const prog_uint8_t* wave_1 = waveform_table[wave_1_index];
   const prog_uint8_t* wave_2 = waveform_table[wave_2_index];
 
-  if (shape_ != WAVEFORM_TRIANGLE) {
+  if (shape_ != WAVEFORM_TRIANGLE && !sync_) {
+    BEGIN_SAMPLE_LOOP_NOSYNC
+      uint8_t sample = InterpolateTwoTables(
+          wave_1, wave_2,
+          phase.integral, gain_1, gain_2);
+      if (sample < parameter_) {
+        sample += parameter_ >> 1;
+      }
+      *buffer++ = sample;
+    END_SAMPLE_LOOP
+  } else if (shape_ != WAVEFORM_TRIANGLE) {
     BEGIN_SAMPLE_LOOP
       UPDATE_PHASE_MORE_REGISTERS
       uint8_t sample = InterpolateTwoTables(

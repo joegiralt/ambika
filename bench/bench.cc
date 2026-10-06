@@ -47,12 +47,16 @@ ISR(TIMER1_COMPA_vect, ISR_NAKED) {
     "sts  bench_isr_count+1, r24 \n\t");
 }
 
-static const uint8_t kBlocks = 8;
+static const uint8_t kBlocks = 4;
 volatile uint16_t cycles[kBlocks];
 volatile uint16_t isr_per_block[kBlocks];
 volatile uint8_t done = 0;
 namespace ambika { volatile uint16_t bench_mark[8]; }
+#ifdef BENCH_PROFILE
 volatile uint16_t marks[kBlocks][8];
+#else
+volatile uint16_t marks[1][8];  // RAM is tight: 2 KB minus the voice
+#endif
 volatile uint8_t dbg_vca = 0, dbg_env2 = 0, dbg_engine = 0, dbg_rx = 0;
 
 void __attribute__((noinline)) bench_done() { asm volatile("nop"); }
@@ -247,8 +251,10 @@ int main(void) {
     uint16_t t0 = TCNT1;
     voice.ProcessBlock();
     uint16_t t1 = TCNT1;
+#ifdef BENCH_PROFILE
     for (uint8_t k = 0; k < 8; ++k) marks[i][k] = bench_mark[k];
     marks[i][7] = t1;
+#endif
     uint16_t n = isr_count - i0;
     isr_per_block[i] = n;
 #ifdef BENCH_NOISR

@@ -1265,6 +1265,7 @@ inline void Voice::RenderOscillators() {
           increment,
           no_sync_,
           sync_state_,
+          patch_.mix_op == OP_SYNC,
           render_.narrow.osc1);
     } else {
       osc_2.Render(
@@ -1273,6 +1274,7 @@ inline void Voice::RenderOscillators() {
           increment,
           patch_.mix_op == OP_SYNC ? sync_state_ : no_sync_,
           dummy_sync_state_,
+          patch_.mix_op == OP_SYNC,
           render_.narrow.osc2);
     }
   }

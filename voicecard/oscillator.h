@@ -87,12 +87,14 @@ class Oscillator {
       uint24_t increment,
       uint8_t* sync_input,
       uint8_t* sync_output,
+      uint8_t sync,
       uint8_t* buffer) {
     shape_ = shape;
     note_ = note;
     phase_increment_ = increment;
     sync_input_ = sync_input;
     sync_output_ = sync_output;
+    sync_ = sync;
     // A hack: when pulse width is set to 0, use a simple wavetable.
     if (shape_ == WAVEFORM_SQUARE) {
       if (parameter_ == 0) {
@@ -148,6 +150,7 @@ class Oscillator {
   // position of phrase wraps
   uint8_t* sync_input_;
   uint8_t* sync_output_;
+  uint8_t sync_;  // hard sync in use: read sync_input_, write sync_output_
   
   void RenderSilence(uint8_t* buffer);
   void RenderBandlimitedPwm(uint8_t* buffer);
