@@ -11,6 +11,7 @@
 #include "voicecard/audio_out.h"
 #include "voicecard/leds.h"
 #include "voicecard/resources.h"
+#include "voicecard/oscillator.h"
 #include "voicecard/voice.h"
 #include "voicecard/voicecard_rx.h"
 #include "bench/patches.h"
@@ -61,6 +62,44 @@ volatile uint8_t dbg_vca = 0, dbg_env2 = 0, dbg_engine = 0, dbg_rx = 0;
 
 void __attribute__((noinline)) bench_done() { asm volatile("nop"); }
 
+#ifdef BENCH_OSCTEST
+// The assembly wavetable loop against the C one: saw and square (parameter 0
+// takes the wavetable path), several notes, increments and parameters, from
+// the same phase state.
+volatile uint16_t osctest_blocks = 0;
+volatile uint16_t osctest_mismatches = 0;
+volatile uint16_t osctest_first[4];
+static uint8_t osc_buf_c[kAudioBlockSize], osc_buf_a[kAudioBlockSize];
+static uint8_t osc_nosync[kAudioBlockSize], osc_syncout[kAudioBlockSize];
+static Oscillator c, a;  // per-instance state, zeroed per configuration
+static void OscTest() {
+  static const uint8_t shapes[2] = { WAVEFORM_SAW, WAVEFORM_SQUARE };
+  static const uint8_t notes[3] = { 36, 57, 84 };
+  static const uint8_t params[3] = { 0, 40, 200 };
+  for (uint8_t sh = 0; sh < 2; ++sh) {
+    for (uint8_t nt = 0; nt < 3; ++nt) {
+      for (uint8_t pr = 0; pr < 3; ++pr) {
+        uint8_t param = shapes[sh] == WAVEFORM_SQUARE ? 0 : params[pr];
+        uint24_t inc; inc.integral = 0x0123 * (nt + 1) + pr * 77; inc.fractional = 0x45 + nt;
+        memset(&c, 0, sizeof(c)); memset(&a, 0, sizeof(a));
+        c.set_parameter(param); a.set_parameter(param);
+        for (uint8_t blk = 0; blk < 5; ++blk) {
+          c.force_c_loop_ = 1; a.force_c_loop_ = 0;
+          c.Render(shapes[sh], notes[nt], inc, osc_nosync, osc_syncout, 0, osc_buf_c);
+          a.Render(shapes[sh], notes[nt], inc, osc_nosync, osc_syncout, 0, osc_buf_a);
+          ++osctest_blocks;
+          for (uint8_t k = 0; k < kAudioBlockSize; ++k) {
+            if (osc_buf_c[k] != osc_buf_a[k]) {
+              if (!osctest_mismatches) { osctest_first[0] = sh; osctest_first[1] = nt * 16 + pr; osctest_first[2] = osc_buf_c[k]; osctest_first[3] = osc_buf_a[k]; }
+              ++osctest_mismatches;
+            }
+          }
+        }
+      }
+    }
+  }
+}
+#endif
 #ifdef BENCH_FMTEST
 // RenderC against RenderAsm: every algorithm, several waveform/level sets,
 // with and without feedback, phases advancing from the same state.
@@ -140,6 +179,12 @@ int main(void) {
   sei();
 #ifdef BENCH_OPTEST
   OperatorTest();
+  done = 1;
+  bench_done();
+  while (1) { }
+#endif
+#ifdef BENCH_OSCTEST
+  OscTest();
   done = 1;
   bench_done();
   while (1) { }

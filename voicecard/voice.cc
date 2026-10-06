@@ -1402,6 +1402,7 @@ void Voice::ProcessBlock() {
         render_.wide[i] = static_cast<uint16_t>(render_.narrow.osc1[i]) << 4;
       }
       audio_buffer.WriteBlock(render_.wide, kAudioBlockSize);
+      BENCH_MARK(4);
       return;
     }
 

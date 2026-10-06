@@ -151,6 +151,11 @@ class Oscillator {
   uint8_t* sync_input_;
   uint8_t* sync_output_;
   uint8_t sync_;  // hard sync in use: read sync_input_, write sync_output_
+#ifdef BENCH_OSCTEST
+ public:
+  uint8_t force_c_loop_;  // bench only: run the C wavetable loop instead
+ private:
+#endif
   
   void RenderSilence(uint8_t* buffer);
   void RenderBandlimitedPwm(uint8_t* buffer);

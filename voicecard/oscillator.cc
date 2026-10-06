@@ -156,6 +156,78 @@ void Oscillator::RenderSimpleWavetable(uint8_t* buffer) {
   const prog_uint8_t* wave_2 = waveform_table[wave_2_index];
 
   if (shape_ != WAVEFORM_TRIANGLE && !sync_) {
+#if defined(__AVR__)
+#ifdef BENCH_OSCTEST
+    if (!force_c_loop_) {
+#endif
+    // The C loop below, as one block: avrlib's InterpolateSample and U8Mix
+    // arithmetic exactly (bench/ BENCH_OSCTEST compares them), without the
+    // call and argument shuffling gcc put around them. About 60 cycles a
+    // sample from 110. r1 is zero on entry and on exit.
+    uint8_t pf = phase_.fractional;
+    uint16_t pi = phase_.integral;
+    uint8_t half = parameter_ >> 1;
+    uint8_t n = kAudioBlockSize;
+    uint8_t s1, s2, fr;
+    asm volatile(
+      "1:                       \n\t"
+      "add  %[pf], %[inf]       \n\t"   /* phase += increment, 24 bits */
+      "adc  %A[pi], %A[ini]     \n\t"
+      "adc  %B[pi], %B[ini]     \n\t"
+      "movw r30, %A[w1]         \n\t"   /* InterpolateSample(wave_1, pi) */
+      "add  r30, %B[pi]         \n\t"
+      "adc  r31, r1             \n\t"
+      "mov  %[fr], %A[pi]       \n\t"
+      "lpm  %[s1], Z+           \n\t"
+      "lpm  r1, Z               \n\t"
+      "mul  %[fr], r1           \n\t"
+      "movw r30, r0             \n\t"
+      "com  %[fr]               \n\t"
+      "mul  %[fr], %[s1]        \n\t"
+      "add  r30, r0             \n\t"
+      "adc  r31, r1             \n\t"
+      "mov  %[s1], r31          \n\t"
+      "eor  r1, r1              \n\t"
+      "movw r30, %A[w2]         \n\t"   /* InterpolateSample(wave_2, pi) */
+      "add  r30, %B[pi]         \n\t"
+      "adc  r31, r1             \n\t"
+      "mov  %[fr], %A[pi]       \n\t"
+      "lpm  %[s2], Z+           \n\t"
+      "lpm  r1, Z               \n\t"
+      "mul  %[fr], r1           \n\t"
+      "movw r30, r0             \n\t"
+      "com  %[fr]               \n\t"
+      "mul  %[fr], %[s2]        \n\t"
+      "add  r30, r0             \n\t"
+      "adc  r31, r1             \n\t"
+      "mov  %[s2], r31          \n\t"
+      "mul  %[s1], %[g1]        \n\t"   /* U8Mix(s1, s2, gain_1, gain_2) */
+      "movw r30, r0             \n\t"
+      "mul  %[s2], %[g2]        \n\t"
+      "add  r30, r0             \n\t"
+      "adc  r31, r1             \n\t"
+      "eor  r1, r1              \n\t"
+      "cp   r31, %[par]         \n\t"   /* if (sample < parameter) += half */
+      "brsh 2f                  \n\t"
+      "add  r31, %[half]        \n\t"
+      "2: st   X+, r31          \n\t"
+      "dec  %[n]                \n\t"
+      "brne 1b                  \n\t"
+      : [pf] "+r" (pf), [pi] "+r" (pi), [buf] "+x" (buffer), [n] "+r" (n),
+        [s1] "=&r" (s1), [s2] "=&r" (s2), [fr] "=&a" (fr)
+      : [inf] "r" (phase_increment_.fractional),
+        [ini] "r" (phase_increment_.integral),
+        [w1] "r" (wave_1), [w2] "r" (wave_2),
+        [g1] "a" (gain_1), [g2] "a" (gain_2),
+        [par] "r" (parameter_), [half] "r" (half)
+      : "r0", "r1", "r30", "r31", "cc", "memory");
+    phase_.fractional = pf;
+    phase_.integral = pi;
+    return;
+#ifdef BENCH_OSCTEST
+    }
+#endif
+#endif
     BEGIN_SAMPLE_LOOP_NOSYNC
       uint8_t sample = InterpolateTwoTables(
           wave_1, wave_2,
