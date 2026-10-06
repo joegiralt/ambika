@@ -75,12 +75,18 @@ echo "Generating factory patches..."
 PATCH_STAGING=$(mktemp -d)
 python3 make_patches.py "$PATCH_STAGING" > /dev/null
 
-# Copy every bank the generator produced, leaving other banks on the card alone
-for BANK_DIR in "$PATCH_STAGING"/PATCH/BANK/*/; do
-    BANK=$(basename "$BANK_DIR")
-    $SUDO mkdir -p "$SDCARD/PATCH/BANK/$BANK"
-    $SUDO cp "$BANK_DIR"*.PAT "$SDCARD/PATCH/BANK/$BANK/"
-    echo "  Bank $BANK: $(ls -1 "$BANK_DIR"*.PAT | wc -l) patches"
+# Copy every bank the generator produced, leaving other banks on the card
+# alone. Both trees: the library page opens on programs, so patches alone are
+# invisible until the user presses S1 to change what is browsed.
+for TREE in PATCH PROGRAM; do
+    [ "$TREE" = PATCH ] && EXT=PAT || EXT=PRO
+    for BANK_DIR in "$PATCH_STAGING/$TREE/BANK"/*/; do
+        [ -d "$BANK_DIR" ] || continue
+        BANK=$(basename "$BANK_DIR")
+        $SUDO mkdir -p "$SDCARD/$TREE/BANK/$BANK"
+        $SUDO cp "$BANK_DIR"*."$EXT" "$SDCARD/$TREE/BANK/$BANK/"
+        echo "  $TREE bank $BANK: $(ls -1 "$BANK_DIR"*."$EXT" | wc -l)"
+    done
 done
 rm -rf "$PATCH_STAGING"
 
@@ -92,3 +98,6 @@ echo "To flash on Ambika:"
 echo "  1. Insert SD card"
 echo "  2. Hold S8 during power-on to flash controller"
 echo "  3. Flash each voicecard with S4 from OS info page"
+echo "  4. Power cycle. The bootloader hands off with a jump to 0x0000, not a"
+echo "     reset, so the LCD keeps the bootloader's state and the app's re-init"
+echo "     desyncs it - random characters until the display is power cycled."
