@@ -128,7 +128,12 @@ class Fm4Op {
 
   // One operator: waveform `wave` at 10-bit phase (higher bits ignored),
   // attenuated. Returns a signed 14-bit sample.
-  static inline int16_t Operator(
+  //
+  // The C version is the reference (bit-exact against ymfm in
+  // voicecard/test). On the AVR, gcc at -Os would not inline it and spent
+  // about 90 cycles per call; the assembly below does the same work in about
+  // 50. bench/ checks the two agree on every input (BENCH_OPTEST).
+  static inline int16_t OperatorC(
       uint8_t wave, uint16_t phase, uint16_t attenuation) {
     // The chip has no true zero: "silent" is the smallest sine value.
     static const uint16_t kZero = 0x859;  // log_sin_[0]
@@ -164,6 +169,15 @@ class Fm4Op {
     return negative ? -v : v;
   }
 
+#ifdef __AVR__
+  static int16_t Operator(uint8_t wave, uint16_t phase, uint16_t attenuation)
+      __attribute__((noinline));
+#else
+  static inline int16_t Operator(
+      uint8_t wave, uint16_t phase, uint16_t attenuation) {
+    return OperatorC(wave, phase, attenuation);
+  }
+#endif
   // Level 0-127 in 0.75 dB steps (127 = full, 0 = off) plus a linear
   // envelope 0-255, as one attenuation. Computed once per block.
   static inline uint16_t Attenuation(uint8_t level, uint8_t envelope) {
@@ -193,11 +207,13 @@ class Fm4Op {
   // output >> 1, as on the OPZ (up to +/-4 cycles).
   inline int16_t Sample(
       uint8_t algorithm,
-      const uint8_t* w,           // 4 waveforms
-      const uint16_t* att,        // 4 attenuations (Attenuation())
+      uint8_t w0, uint8_t w1, uint8_t w2, uint8_t w3,      // waveforms
+      uint16_t a0, uint16_t a1, uint16_t a2, uint16_t a3,  // Attenuation()
       uint16_t feedback_gain)     // FeedbackGain()
       __attribute__((always_inline)) {  // one caller: Render
-    uint16_t p[4];
+    // Phases advanced one by one: as a loop over op_[i], gcc spent as many
+    // cycles on pointer arithmetic as on the adds.
+    uint16_t p0, p1, p2, p3;
 #ifdef FM_PHASE_DITHER
     // Truncating the phase to the waveform index leaves discrete, inharmonic
     // spurs - they beat against a held note and rattle. Dithering the
@@ -205,23 +221,26 @@ class Fm4Op {
     // which is far less noticeable. 16-bit Galois LFSR, a few instructions.
     dither_ = (dither_ >> 1) ^ (-(dither_ & 1) & 0xB400);
     uint16_t d = dither_;
-#endif
+    uint16_t p[4];
     for (uint8_t i = 0; i < 4; ++i) {
       op_[i].phase += op_[i].phase_increment;
-#ifdef FM_PHASE_DITHER
       p[i] = (op_[i].phase + d) >> 16;
       d = (d << 5) | (d >> 11);   // decorrelate the four operators
-#else
-      p[i] = op_[i].phase >> 16;
-#endif
     }
+    p0 = p[0]; p1 = p[1]; p2 = p[2]; p3 = p[3];
+#else
+    op_[0].phase += op_[0].phase_increment; p0 = op_[0].phase >> 16;
+    op_[1].phase += op_[1].phase_increment; p1 = op_[1].phase >> 16;
+    op_[2].phase += op_[2].phase_increment; p2 = op_[2].phase >> 16;
+    op_[3].phase += op_[3].phase_increment; p3 = op_[3].phase >> 16;
+#endif
 
     int16_t fb = 0;
     if (feedback_gain) {
       fb = (static_cast<int32_t>(feedback_[0] + feedback_[1]) *
             feedback_gain) >> 16;
     }
-    int16_t op4 = Operator(w[3], p[3] + fb, att[3]);
+    int16_t op4 = Operator(w3, p3 + fb, a3);
     feedback_[1] = feedback_[0];
     feedback_[0] = op4;
 
@@ -230,49 +249,57 @@ class Fm4Op {
     int16_t sum, op3, op2;
     switch (algorithm) {
       case FM_ALG_1:  // 4->3->2->1
-        op3 = Operator(w[2], p[2] + (op4 >> 1), att[2]);
-        op2 = Operator(w[1], p[1] + (op3 >> 1), att[1]);
-        sum = Operator(w[0], p[0] + (op2 >> 1), att[0]);
+        op3 = Operator(w2, p2 + (op4 >> 1), a2);
+        op2 = Operator(w1, p1 + (op3 >> 1), a1);
+        sum = Operator(w0, p0 + (op2 >> 1), a0);
         break;
       case FM_ALG_2:  // (4+3)->2->1
-        op3 = Operator(w[2], p[2], att[2]);
-        op2 = Operator(w[1], p[1] + ((op4 + op3) >> 1), att[1]);
-        sum = Operator(w[0], p[0] + (op2 >> 1), att[0]);
+        op3 = Operator(w2, p2, a2);
+        op2 = Operator(w1, p1 + ((op4 + op3) >> 1), a1);
+        sum = Operator(w0, p0 + (op2 >> 1), a0);
         break;
       case FM_ALG_3:  // (4 + (3->2))->1
-        op3 = Operator(w[2], p[2], att[2]);
-        op2 = Operator(w[1], p[1] + (op3 >> 1), att[1]);
-        sum = Operator(w[0], p[0] + ((op4 + op2) >> 1), att[0]);
+        op3 = Operator(w2, p2, a2);
+        op2 = Operator(w1, p1 + (op3 >> 1), a1);
+        sum = Operator(w0, p0 + ((op4 + op2) >> 1), a0);
         break;
       case FM_ALG_4:  // ((4->3) + 2)->1
-        op3 = Operator(w[2], p[2] + (op4 >> 1), att[2]);
-        op2 = Operator(w[1], p[1], att[1]);
-        sum = Operator(w[0], p[0] + ((op3 + op2) >> 1), att[0]);
+        op3 = Operator(w2, p2 + (op4 >> 1), a2);
+        op2 = Operator(w1, p1, a1);
+        sum = Operator(w0, p0 + ((op3 + op2) >> 1), a0);
         break;
       case FM_ALG_5:  // (4->3) + (2->1)
-        op3 = Operator(w[2], p[2] + (op4 >> 1), att[2]);
-        op2 = Operator(w[1], p[1], att[1]);
-        sum = Operator(w[0], p[0] + (op2 >> 1), att[0]) + op3;
+        op3 = Operator(w2, p2 + (op4 >> 1), a2);
+        op2 = Operator(w1, p1, a1);
+        sum = Operator(w0, p0 + (op2 >> 1), a0) + op3;
         break;
       case FM_ALG_6:  // 4->(1+2+3)
         op4 >>= 1;
-        sum = Operator(w[0], p[0] + op4, att[0]) +
-              Operator(w[1], p[1] + op4, att[1]) +
-              Operator(w[2], p[2] + op4, att[2]);
+        sum = Operator(w0, p0 + op4, a0) +
+              Operator(w1, p1 + op4, a1) +
+              Operator(w2, p2 + op4, a2);
         break;
       case FM_ALG_7:  // (4->3) + 2 + 1
-        sum = Operator(w[0], p[0], att[0]) +
-              Operator(w[1], p[1], att[1]) +
-              Operator(w[2], p[2] + (op4 >> 1), att[2]);
+        sum = Operator(w0, p0, a0) +
+              Operator(w1, p1, a1) +
+              Operator(w2, p2 + (op4 >> 1), a2);
         break;
       case FM_ALG_8:  // 1+2+3+4
       default:
-        sum = Operator(w[0], p[0], att[0]) +
-              Operator(w[1], p[1], att[1]) +
-              Operator(w[2], p[2], att[2]) + op4;
+        sum = Operator(w0, p0, a0) +
+              Operator(w1, p1, a1) +
+              Operator(w2, p2, a2) + op4;
         break;
     }
     return sum;
+  }
+
+  // Array form, for the tests.
+  inline int16_t Sample(
+      uint8_t algorithm, const uint8_t* w, const uint16_t* att,
+      uint16_t feedback_gain) {
+    return Sample(algorithm, w[0], w[1], w[2], w[3],
+                  att[0], att[1], att[2], att[3], feedback_gain);
   }
 
   // Render a block of 12-bit DAC samples (centered on 2048).
@@ -283,8 +310,12 @@ class Fm4Op {
       uint16_t feedback_gain,
       uint16_t* buffer,
       uint8_t size) {
+    // Copied out of the arrays once so the inlined Sample works on registers.
+    uint8_t w0 = w[0], w1 = w[1], w2 = w[2], w3 = w[3];
+    uint16_t a0 = att[0], a1 = att[1], a2 = att[2], a3 = att[3];
     while (size--) {
-      int16_t out = Sample(algorithm, w, att, feedback_gain);
+      int16_t out = Sample(algorithm, w0, w1, w2, w3, a0, a1, a2, a3,
+                           feedback_gain);
       // 14-bit sum to the 12-bit DAC. The chip doesn't clip here; the DAC's
       // range forces a choice, so several full carriers clip.
       out >>= 2;
@@ -334,6 +365,80 @@ class Fm4Op {
 
   DISALLOW_COPY_AND_ASSIGN(Fm4Op);
 };
+
+#ifdef __AVR__
+// Same algorithm as OperatorC, step for step; comments name the C lines.
+// v and t need upper registers (ldi, cpi, andi); Z is the table pointer.
+inline int16_t Fm4Op::Operator(
+    uint8_t wave, uint16_t phase, uint16_t attenuation) {
+  uint16_t v;
+  uint8_t t;
+  asm volatile(
+    "mov  %[t], %[w]          \n\t"
+    "andi %[t], 6             \n\t"   // (wave & 6) &&
+    "breq 1f                  \n\t"
+    "sbrc %B[p], 1            \n\t"   // (phase & 0x200): second half
+    "rjmp 9f                  \n\t"
+    "1: movw r30, %A[p]       \n\t"   // working phase in Z
+    "sbrs %[w], 2             \n\t"   // wave & 4: double speed
+    "rjmp 2f                  \n\t"
+    "lsl  r30                 \n\t"   // phase <<= 1
+    "rol  r31                 \n\t"
+    "sbrc %[w], 1             \n\t"   // wave & 2: phase &= 0x1FF
+    "andi r31, 1              \n\t"
+    "2: mov  %[t], r31        \n\t"   // bit 1 of t = negative (phase bit 9)
+    "sbrc r31, 0              \n\t"   // phase & 0x100: quarter = ~quarter
+    "com  r30                 \n\t"
+    "ldi  r31, 0              \n\t"   // Z = &log_sin_[quarter]
+    "lsl  r30                 \n\t"
+    "rol  r31                 \n\t"
+    "subi r30, lo8(-(%[ls]))  \n\t"
+    "sbci r31, hi8(-(%[ls]))  \n\t"
+    "lpm  %A[v], Z+           \n\t"
+    "lpm  %B[v], Z            \n\t"
+    "sbrs %[w], 0             \n\t"   // wave & 1: a <<= 1, capped at kZero
+    "rjmp 3f                  \n\t"
+    "lsl  %A[v]               \n\t"
+    "rol  %B[v]               \n\t"
+    "ldi  r30, 0x08           \n\t"   // a > 0x859  <=>  a >= 0x85A
+    "cpi  %A[v], 0x5A         \n\t"
+    "cpc  %B[v], r30          \n\t"
+    "brlo 3f                  \n\t"
+    "ldi  %A[v], 0x59         \n\t"
+    "ldi  %B[v], 0x08         \n\t"
+    "3: add  %A[v], %A[att]   \n\t"   // a += attenuation
+    "adc  %B[v], %B[att]      \n\t"
+    "rjmp 4f                  \n\t"
+    "9: ldi  %A[v], 0x59      \n\t"   // a = kZero, negative = 0
+    "ldi  %B[v], 0x08         \n\t"
+    "clr  %[t]                \n\t"
+    "add  %A[v], %A[att]      \n\t"
+    "adc  %B[v], %B[att]      \n\t"
+    "4: cpi  %B[v], 0x0D      \n\t"   // a >= kFmSilent (0xD00): return 0
+    "brsh 8f                  \n\t"
+    "movw r30, %A[v]          \n\t"   // Z = &exp_[a]
+    "lsl  r30                 \n\t"
+    "rol  r31                 \n\t"
+    "subi r30, lo8(-(%[ex]))  \n\t"
+    "sbci r31, hi8(-(%[ex]))  \n\t"
+    "lpm  %A[v], Z+           \n\t"
+    "lpm  %B[v], Z            \n\t"
+    "sbrs %[t], 1             \n\t"   // negative ? -v : v
+    "rjmp 7f                  \n\t"
+    "com  %B[v]               \n\t"
+    "neg  %A[v]               \n\t"
+    "sbci %B[v], 0xFF         \n\t"
+    "rjmp 7f                  \n\t"
+    "8: clr  %A[v]            \n\t"
+    "clr  %B[v]               \n\t"
+    "7:                       \n\t"
+    : [v] "=&d" (v), [t] "=&d" (t)
+    : [w] "r" (wave), [p] "r" (phase), [att] "r" (attenuation),
+      [ls] "i" (log_sin_), [ex] "i" (exp_)
+    : "r30", "r31", "cc");
+  return static_cast<int16_t>(v);
+}
+#endif  // __AVR__
 
 }  // namespace ambika
 

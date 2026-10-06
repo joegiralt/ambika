@@ -53,8 +53,81 @@ volatile uint8_t dbg_vca = 0, dbg_env2 = 0, dbg_engine = 0, dbg_rx = 0;
 
 void __attribute__((noinline)) bench_done() { asm volatile("nop"); }
 
+#ifdef BENCH_OPCYCLES
+int16_t __attribute__((noinline)) OperatorCNoInline(uint8_t w, uint16_t p, uint16_t a) {
+  return Fm4Op::OperatorC(w, p, a);
+}
+#endif
+#ifdef BENCH_OPTEST
+// Compare the assembly Operator against OperatorC on every wave and 10-bit
+// phase, with the phase's upper bits set too, for a set of attenuations.
+volatile uint32_t optest_cases = 0;
+volatile uint16_t optest_mismatches = 0;
+volatile uint16_t optest_first[5];  // wave, phase, att, c, asm
+static const uint16_t kAtts[] PROGMEM = {
+  0, 1, 0x7F, 0x100, 0x3FF, 0x7FF, 0x858, 0x859, 0x85A, 0xA00, 0xCFF, 0xD00,
+  0xD01, 0xFFF, 13 << 8 };
+static void OperatorTest() {
+  for (uint8_t wave = 0; wave < 8; ++wave) {
+    for (uint16_t ph = 0; ph < 1024; ++ph) {
+      for (uint8_t hi = 0; hi < 2; ++hi) {
+        uint16_t phase = ph | (hi ? 0xFC00 : 0);
+        for (uint8_t k = 0; k < sizeof(kAtts) / 2; ++k) {
+          uint16_t att = pgm_read_word(&kAtts[k]);
+          int16_t c = Fm4Op::OperatorC(wave, phase, att);
+          int16_t a = Fm4Op::Operator(wave, phase, att);
+          ++optest_cases;
+          if (c != a) {
+            if (!optest_mismatches) {
+              optest_first[0] = wave; optest_first[1] = phase;
+              optest_first[2] = att; optest_first[3] = c; optest_first[4] = a;
+            }
+            ++optest_mismatches;
+          }
+        }
+      }
+    }
+  }
+}
+#endif
+
 int main(void) {
   sei();
+#ifdef BENCH_OPTEST
+  OperatorTest();
+  done = 1;
+  bench_done();
+  while (1) { }
+#endif
+#ifdef BENCH_OPCYCLES
+  // Cycles per call: asm Operator, C Operator (not inlined), and one
+  // Fm4Op::Sample for algorithm 1 with no feedback.
+  TCCR1A = 0; TCCR1B = 1;
+  {
+    uint16_t t0, t1;
+    volatile int16_t sink = 0;
+    t0 = TCNT1;
+    for (uint8_t i = 0; i < 100; ++i) sink += Fm4Op::Operator(0, i * 7, 0x100);
+    t1 = TCNT1; cycles[0] = (t1 - t0) / 100;
+    t0 = TCNT1;
+    for (uint8_t i = 0; i < 100; ++i) sink += OperatorCNoInline(0, i * 7, 0x100);
+    t1 = TCNT1; cycles[1] = (t1 - t0) / 100;
+    Fm4Op fm; fm.Init();
+    for (uint8_t i = 0; i < 4; ++i) fm.mutable_op(i)->phase_increment = 0x01234567UL * (i + 1);
+    t0 = TCNT1;
+    for (uint8_t i = 0; i < 100; ++i) sink += fm.Sample(FM_ALG_1, 0, 0, 0, 0, 0x100, 0x100, 0x100, 0x100, 0);
+    t1 = TCNT1; cycles[2] = (t1 - t0) / 100;
+    t0 = TCNT1;
+    for (uint8_t i = 0; i < 100; ++i) sink += fm.Sample(FM_ALG_8, 0, 0, 0, 0, 0x100, 0x100, 0x100, 0x100, 0);
+    t1 = TCNT1; cycles[3] = (t1 - t0) / 100;
+    t0 = TCNT1;
+    for (uint8_t i = 0; i < 100; ++i) { }
+    t1 = TCNT1; cycles[4] = (t1 - t0) / 100;  // loop overhead
+  }
+  done = 1;
+  bench_done();
+  while (1) { }
+#endif
   UCSR0B = 0;
   dac_interface.Init();
   rx_led.set_mode(DIGITAL_OUTPUT);
