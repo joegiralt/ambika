@@ -1372,9 +1372,13 @@ void Voice::ProcessBlock() {
       break;
   }
   
-  // Mix-in sub oscillator or transient generator.
+  // Mix-in sub oscillator or transient generator. At zero gain the mix is
+  // sample * 255/256, so skipping it costs one LSB of level: not worth
+  // 1,800 cycles a block.
   uint8_t sub_gain = U15ShiftRight7(dst_[MOD_DST_MIX_SUB_OSC]);
-  if (patch_.mix_sub_osc_shape < WAVEFORM_SUB_OSC_CLICK) {
+  if (sub_gain == 0) {
+    // nothing to mix in
+  } else if (patch_.mix_sub_osc_shape < WAVEFORM_SUB_OSC_CLICK) {
     sub_osc.Render(patch_.mix_sub_osc_shape, render_.narrow.osc1, sub_gain);
   } else {
     sub_gain <<= 1;
