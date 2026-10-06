@@ -39,47 +39,38 @@ the FFT peak land on a comb line, which is why the capture read 245 Hz for A3.
 
 ### Cycle budget, measured in simavr (`bench/`)
 
-Budget per block: 40 samples × 510 cycles = **20,400**. The audio ISR cost
-about **157 cycles per sample, 6,300 per block** (17 push/pop pairs because
-of two non-inlined Strobe calls and a multiply, the VCA lookup once per
-block). Made a leaf on 6 Oct (`AudioOutTick` in `voicecard/audio_out.h`: VCA
-lookup moved to the main loop, chip select strobed directly): **~122 cycles
-per sample, 4,900 per block**, 9 push/pop pairs, no calls. That leaves about
-**15,500 cycles for `ProcessBlock`**. Nothing fits:
+Budget per block: 40 samples × 510 cycles = **20,400**, wall time including
+the audio ISR. Verified on hardware: the bare sine at 20,150 was clean,
+DynoWurlie at 22,500 lapped, so the simulator is within about 1 % of the
+card.
 
-| patch | ProcessBlock | wall per block with ISR | over |
-|---|---|---|---|
-| FM bare sine | 19,000 | 27,500 (25,000 with the leaner ISR) | 33 % (23 %) |
-| FM, four carriers | 19,350 | 27,600 | 35 % |
-| classic sine | 16,560 | 23,600 | 16 % |
-| T078 LatelyBass | 20,500 | 29,500 | 45 % |
-| T013 DynoWurlie | — | 29,800 | 46 % |
+Cuts made on 6 Oct, all output-identical (host renders byte for byte, or
+the bench's sample-for-sample comparison against the C reference):
 
-Where the FM sine's 19,000 go: control rate (matrix, 7 envelopes) 3,450;
-`Fm4Op::Render`, 20 half-rate samples × 4 operators, **11,970** (≈150 per
-operator-sample, silent operators included); `ExpandHalfRate` four-point fit
-2,440; writing the block 1,090. The classic sine spends 7,670 of its 16,560
-in the noise/fuzz post-mix loop with both at zero.
+| step | FM bare sine | LatelyBass | DynoWurlie | classic sine |
+|---|---|---|---|---|
+| this morning | 27,500 | 29,500 | 29,800 | 23,600 |
+| leaf C ISR (VCA lookup out of the ISR) | 25,000 | 27,000 | | |
+| assembly ISR (`AUDIO_ISR`, 95 cycles/sample from 157) | 22,400 | 24,100 | | |
+| block into the ring with `WriteBlock` | 21,850 | 23,800 | | 20,060 |
+| sliding-window `ExpandHalfRate`, skip zero mod slots | 20,150 | 22,250 | 22,500 | |
+| classic: skip the noise/fuzz loop at zero gain | | | | 17,700 |
+| `Fm4Op::RenderAsm`: phases in registers, inlined operators | 17,800 | 19,900 | 20,300 | |
 
-So the FM engine needs to lose about 5,000 cycles per block (25 %), or the
-ISR must get cheaper, or both. Levers, biggest first:
+What the FM sine block is now: control rate 2,900, render 8,800, expansion
+1,570, ring write 750, ISR 3,800, loop overhead the rest.
 
-- ISR: done, 157 → ~122 cycles; what remains is the interrupt entry and
-  exit, nine register saves and the ring buffer and SPI accesses. An
-  assembly ISR might reach ~90. Not yet heard on hardware.
-- `Fm4Op::Render`: 150 cycles per operator-sample. Skip operators whose
-  attenuation is `kFmSilent` before the table lookups; the 32-bit phase
-  accumulate and two PROGMEM lookups are the rest.
-- `ExpandHalfRate`: the four-point fit costs 2,440; midpoint was cheaper.
-- Classic: skip the noise/fuzz loop when both gains are zero (~6,000).
-- A cheap guard in the ISR (`readable()` check, repeat the last sample) would
-  stop the rattle turning into stale chunks, but with a steady overrun it just
-  becomes a pitch drop; it is not a fix.
+Hardware after the ISR/ring/expansion build (d4fe36d): bare sine clean at
+A2, A3, A5 (0 bursts/s from 108–128); classic sine still lapping (183/s);
+DynoWurlie 103/s. The assembly render build (5f5bb0a) is to be captured.
 
-Not verified: the ISR cost on hardware (simavr's USART timing), and that
-`Voice::ProcessBlock` in simavr matches the chip cycle for cycle; the lap rate
-predicted from the bench (~33 % late) matches the captured 20 % stale audio
-within the crude model, which is as close as this gets without a scope.
+Still over or at the edge: DynoWurlie 20,300 in the simulator. Next levers,
+all smaller: the control rate (7 envelopes + matrix, 2,900–3,350), the
+expansion in assembly (~600), the once-per-block TXC wait in the ISR.
+
+The assembly lives in `voicecard/audio_out.h` (ISR) and `voicecard/fm4op.h`
+(operator, render). `bench/run.sh ... -DBENCH_FMTEST` and `-DBENCH_OPTEST`
+prove the assembly against the C versions; run them after touching either.
 
 ## Also present, lower priority
 
