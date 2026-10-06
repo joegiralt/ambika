@@ -83,6 +83,23 @@ def load_fm4(level=100):
     sysex(0x01, 1, fm4_patch(level)); time.sleep(0.2)
     nrpn(144, 127); nrpn(145, 0); nrpn(146, 0)
 
+
+def load_file(path):
+    """Send a Carcosa .PAT (RIFF, as make_patches.py writes) to part 1 by sysex."""
+    import struct
+    d = open(path, 'rb').read()
+    i = d.index(b'obj ')
+    size = struct.unpack('<I', d[i + 4:i + 8])[0]
+    patch = d[i + 12:i + 8 + size]           # skip the 4-byte position
+    assert len(patch) == 144, len(patch)
+    sysex(0x01, 1, patch); time.sleep(0.2)
+    nrpn(144, 127); nrpn(145, 0); nrpn(146, 0)
+
+
+def load_classic_saw():
+    p = bytearray(classic_patch()); p[0] = 1; p[4] = 1; p[7] = 5; p[8] = 32   # saw + saw, detune 5, balance mid
+    sysex(0x01, 1, bytes(p)); time.sleep(0.2); nrpn(144, 127); nrpn(145, 0); nrpn(146, 0)
+
 import sys
 if __name__ == '__main__':
-    globals()[sys.argv[1]](*[int(x) for x in sys.argv[2:]])
+    globals()[sys.argv[1]](*[x if x.endswith('.PAT') else int(x) for x in sys.argv[2:]])

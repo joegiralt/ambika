@@ -51,8 +51,8 @@ static const uint8_t kBlocks = 8;
 volatile uint16_t cycles[kBlocks];
 volatile uint16_t isr_per_block[kBlocks];
 volatile uint8_t done = 0;
-namespace ambika { volatile uint16_t bench_mark[6]; }
-volatile uint16_t marks[kBlocks][6];
+namespace ambika { volatile uint16_t bench_mark[8]; }
+volatile uint16_t marks[kBlocks][8];
 volatile uint8_t dbg_vca = 0, dbg_env2 = 0, dbg_engine = 0, dbg_rx = 0;
 
 void __attribute__((noinline)) bench_done() { asm volatile("nop"); }
@@ -212,6 +212,29 @@ int main(void) {
 #endif
     voice.ProcessBlock(); AudioOutUpdateVca();
   }
+#ifdef BENCH_SMOOTH
+  // Largest sample-to-sample step in the rendered blocks of this patch: a
+  // held sine at A3 moves at most ~75 DAC steps per sample. Catches the
+  // 16-bit int traps the host tests cannot.
+  volatile uint16_t max_step = 0;
+  {
+    uint16_t prev = 2048;
+    for (uint8_t blk = 0; blk < 8; ++blk) {
+      audio_buffer.Flush();
+      voice.ProcessBlock();
+      for (uint8_t k = 0; k < kAudioBlockSize; ++k) {
+        uint16_t v = AudioRing::buffer_[k];
+        uint16_t step = v > prev ? v - prev : prev - v;
+        if (blk > 0 && step > max_step) max_step = step;
+        prev = v;
+      }
+    }
+  }
+  cycles[0] = max_step;
+  done = 1;
+  bench_done();
+  while (1) { }
+#endif
   dbg_vca = voice.vca(); dbg_env2 = voice.modulation_source(MOD_SRC_ENV_2);
   dbg_engine = voice.mutable_patch_data()[106]; dbg_rx = voicecard_rx.writable();
   for (uint8_t i = 0; i < kBlocks; ++i) {
@@ -224,8 +247,8 @@ int main(void) {
     uint16_t t0 = TCNT1;
     voice.ProcessBlock();
     uint16_t t1 = TCNT1;
-    for (uint8_t k = 0; k < 6; ++k) marks[i][k] = bench_mark[k];
-    marks[i][5] = t1;
+    for (uint8_t k = 0; k < 8; ++k) marks[i][k] = bench_mark[k];
+    marks[i][7] = t1;
     uint16_t n = isr_count - i0;
     isr_per_block[i] = n;
 #ifdef BENCH_NOISR

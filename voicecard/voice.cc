@@ -30,7 +30,7 @@ using namespace avrlib;
 namespace ambika {
 // Cycle profile hooks for bench/ (empty in the firmware build).
 #ifdef BENCH_PROFILE
-extern volatile uint16_t bench_mark[6];
+extern volatile uint16_t bench_mark[8];
 #define BENCH_MARK(i) bench_mark[i] = TCNT1
 #else
 #define BENCH_MARK(i)
@@ -1282,7 +1282,9 @@ inline void Voice::RenderOscillators() {
 void Voice::ProcessBlock() {
   BENCH_MARK(0);
   LoadSources();
+  BENCH_MARK(5);
   ProcessModulationMatrix();
+  BENCH_MARK(6);
   UpdateDestinations();
   BENCH_MARK(1);
   

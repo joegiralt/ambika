@@ -120,7 +120,10 @@ void Oscillator::RenderSimpleWavetable(uint8_t* buffer) {
       uint8_t frac = (phase.integral & 0x7F) << 1;
       uint16_t a = pgm_read_word(&wav_res_sine16[index]);
       uint16_t b = pgm_read_word(&wav_res_sine16[index + 1]);
-      *buffer++ = (a + ((static_cast<int32_t>(b - a) * frac) >> 8)) >> 8;
+      // b - a is unsigned on the AVR (int is 16 bits), so a falling slope
+      // wrapped to +65000 and the second half of every cycle was garbage.
+      int16_t delta = static_cast<int16_t>(b - a);
+      *buffer++ = (a + ((static_cast<int32_t>(delta) * frac) >> 8)) >> 8;
     END_SAMPLE_LOOP
     return;
   }
