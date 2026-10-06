@@ -124,7 +124,7 @@ class Fm4Op {
   }
 
   static const prog_uint16_t log_sin_[256] PROGMEM;
-  static const prog_uint16_t exp_[kFmSilent] PROGMEM;
+  static const prog_uint16_t exp_[4 * 256] PROGMEM;
   static const prog_uint16_t env_to_attenuation_[256] PROGMEM;
   static const prog_uint16_t feedback_gain_[16] PROGMEM;
 
@@ -167,7 +167,9 @@ class Fm4Op {
     if (a >= kFmSilent) {
       return 0;
     }
-    int16_t v = pgm_read_word(&exp_[a]);
+    // exp_ holds four shifts (a's bits 8-9); the rest is a shift by 4, 8
+    // or 12 (bits 10-11). Identical to a 13-copy table.
+    int16_t v = pgm_read_word(&exp_[a & 0x3FF]) >> ((a >> 10) << 2);
     return negative ? -v : v;
   }
 
@@ -407,7 +409,7 @@ class Fm4Op {
 inline int16_t Fm4Op::Operator(
     uint8_t wave, uint16_t phase, uint16_t attenuation) {
   uint16_t v;
-  uint8_t t;
+  uint8_t t, q;
   asm volatile(
     "mov  %[t], %[w]          \n\t"
     "andi %[t], 6             \n\t"   // (wave & 6) &&
@@ -451,14 +453,36 @@ inline int16_t Fm4Op::Operator(
     "adc  %B[v], %B[att]      \n\t"
     "4: cpi  %B[v], 0x0D      \n\t"   // a >= kFmSilent (0xD00): return 0
     "brsh 8f                  \n\t"
-    "movw r30, %A[v]          \n\t"   // Z = &exp_[a]
+    "mov  %[q], %B[v]         \n\t"   // q = a >> 10: shift by 4q after
+    "lsr  %[q]                \n\t"
+    "lsr  %[q]                \n\t"
+    "andi %B[v], 0x03         \n\t"   // Z = &exp_[a & 0x3FF]
+    "movw r30, %A[v]          \n\t"
     "lsl  r30                 \n\t"
     "rol  r31                 \n\t"
     "subi r30, lo8(-(%[ex]))  \n\t"
     "sbci r31, hi8(-(%[ex]))  \n\t"
     "lpm  %A[v], Z+           \n\t"
     "lpm  %B[v], Z            \n\t"
-    "sbrs %[t], 1             \n\t"   // negative ? -v : v
+    "tst  %[q]                \n\t"
+    "breq 6f                  \n\t"
+    "cpi  %[q], 2             \n\t"
+    "brlo 5f                  \n\t"
+    "mov  %A[v], %B[v]        \n\t"   // >> 8
+    "clr  %B[v]               \n\t"
+    "cpi  %[q], 3             \n\t"
+    "brne 6f                  \n\t"
+    "swap %A[v]               \n\t"   // and >> 4 more: q == 3
+    "andi %A[v], 0x0F         \n\t"
+    "rjmp 6f                  \n\t"
+    "5: swap %A[v]            \n\t"   // >> 4
+    "andi %A[v], 0x0F         \n\t"
+    "swap %B[v]               \n\t"
+    "mov  %[q], %B[v]         \n\t"
+    "andi %[q], 0xF0          \n\t"
+    "or   %A[v], %[q]         \n\t"
+    "andi %B[v], 0x0F         \n\t"
+    "6: sbrs %[t], 1          \n\t"   // negative ? -v : v
     "rjmp 7f                  \n\t"
     "com  %B[v]               \n\t"
     "neg  %A[v]               \n\t"
@@ -467,7 +491,7 @@ inline int16_t Fm4Op::Operator(
     "8: clr  %A[v]            \n\t"
     "clr  %B[v]               \n\t"
     "7:                       \n\t"
-    : [v] "=&d" (v), [t] "=&d" (t)
+    : [v] "=&d" (v), [t] "=&d" (t), [q] "=&d" (q)
     : [w] "r" (wave), [p] "r" (phase), [att] "r" (attenuation),
       [ls] "i" (log_sin_), [ex] "i" (exp_)
     : "r30", "r31", "cc");
@@ -638,14 +662,36 @@ inline __attribute__((noinline)) void Fm4Op::RenderAsm(
     "adc  r19, r23            \n\t"
     "26: cpi  r19, 0x0D       \n\t"   /* a >= kFmSilent: 0 */
     "brsh 28f                 \n\t"
-    "movw r30, r18            \n\t"   /* v = exp_[a] */
+    "mov  r24, r19            \n\t"   /* q = a >> 10; v = exp_[a & 0x3FF] >> 4q */
+    "lsr  r24                 \n\t"
+    "lsr  r24                 \n\t"
+    "andi r19, 0x03           \n\t"
+    "movw r30, r18            \n\t"
     "lsl  r30                 \n\t"
     "rol  r31                 \n\t"
     "subi r30, lo8(-(%[ex]))  \n\t"
     "sbci r31, hi8(-(%[ex]))  \n\t"
     "lpm  r18, Z+             \n\t"
     "lpm  r19, Z              \n\t"
-    "sbrs r20, 1              \n\t"
+    "tst  r24                 \n\t"
+    "breq 32f                 \n\t"
+    "cpi  r24, 2              \n\t"
+    "brlo 31f                 \n\t"
+    "mov  r18, r19            \n\t"   /* >> 8 */
+    "clr  r19                 \n\t"
+    "cpi  r24, 3              \n\t"
+    "brne 32f                 \n\t"
+    "swap r18                 \n\t"   /* and >> 4 more: q == 3 */
+    "andi r18, 0x0F           \n\t"
+    "rjmp 32f                 \n\t"
+    "31: swap r18             \n\t"   /* >> 4 */
+    "andi r18, 0x0F           \n\t"
+    "swap r19                 \n\t"
+    "mov  r24, r19            \n\t"
+    "andi r24, 0xF0           \n\t"
+    "or   r18, r24            \n\t"
+    "andi r19, 0x0F           \n\t"
+    "32: sbrs r20, 1          \n\t"
     "rjmp 27f                 \n\t"
     "com  r19                 \n\t"   /* negative half */
     "neg  r18                 \n\t"
@@ -728,14 +774,36 @@ inline __attribute__((noinline)) void Fm4Op::RenderAsm(
     "adc  r19, r23            \n\t"
     "26: cpi  r19, 0x0D       \n\t"   /* a >= kFmSilent: 0 */
     "brsh 28f                 \n\t"
-    "movw r30, r18            \n\t"   /* v = exp_[a] */
+    "mov  r24, r19            \n\t"   /* q = a >> 10; v = exp_[a & 0x3FF] >> 4q */
+    "lsr  r24                 \n\t"
+    "lsr  r24                 \n\t"
+    "andi r19, 0x03           \n\t"
+    "movw r30, r18            \n\t"
     "lsl  r30                 \n\t"
     "rol  r31                 \n\t"
     "subi r30, lo8(-(%[ex]))  \n\t"
     "sbci r31, hi8(-(%[ex]))  \n\t"
     "lpm  r18, Z+             \n\t"
     "lpm  r19, Z              \n\t"
-    "sbrs r20, 1              \n\t"
+    "tst  r24                 \n\t"
+    "breq 32f                 \n\t"
+    "cpi  r24, 2              \n\t"
+    "brlo 31f                 \n\t"
+    "mov  r18, r19            \n\t"   /* >> 8 */
+    "clr  r19                 \n\t"
+    "cpi  r24, 3              \n\t"
+    "brne 32f                 \n\t"
+    "swap r18                 \n\t"   /* and >> 4 more: q == 3 */
+    "andi r18, 0x0F           \n\t"
+    "rjmp 32f                 \n\t"
+    "31: swap r18             \n\t"   /* >> 4 */
+    "andi r18, 0x0F           \n\t"
+    "swap r19                 \n\t"
+    "mov  r24, r19            \n\t"
+    "andi r24, 0xF0           \n\t"
+    "or   r18, r24            \n\t"
+    "andi r19, 0x0F           \n\t"
+    "32: sbrs r20, 1          \n\t"
     "rjmp 27f                 \n\t"
     "com  r19                 \n\t"   /* negative half */
     "neg  r18                 \n\t"
@@ -820,14 +888,36 @@ inline __attribute__((noinline)) void Fm4Op::RenderAsm(
     "adc  r19, r23            \n\t"
     "26: cpi  r19, 0x0D       \n\t"   /* a >= kFmSilent: 0 */
     "brsh 28f                 \n\t"
-    "movw r30, r18            \n\t"   /* v = exp_[a] */
+    "mov  r24, r19            \n\t"   /* q = a >> 10; v = exp_[a & 0x3FF] >> 4q */
+    "lsr  r24                 \n\t"
+    "lsr  r24                 \n\t"
+    "andi r19, 0x03           \n\t"
+    "movw r30, r18            \n\t"
     "lsl  r30                 \n\t"
     "rol  r31                 \n\t"
     "subi r30, lo8(-(%[ex]))  \n\t"
     "sbci r31, hi8(-(%[ex]))  \n\t"
     "lpm  r18, Z+             \n\t"
     "lpm  r19, Z              \n\t"
-    "sbrs r20, 1              \n\t"
+    "tst  r24                 \n\t"
+    "breq 32f                 \n\t"
+    "cpi  r24, 2              \n\t"
+    "brlo 31f                 \n\t"
+    "mov  r18, r19            \n\t"   /* >> 8 */
+    "clr  r19                 \n\t"
+    "cpi  r24, 3              \n\t"
+    "brne 32f                 \n\t"
+    "swap r18                 \n\t"   /* and >> 4 more: q == 3 */
+    "andi r18, 0x0F           \n\t"
+    "rjmp 32f                 \n\t"
+    "31: swap r18             \n\t"   /* >> 4 */
+    "andi r18, 0x0F           \n\t"
+    "swap r19                 \n\t"
+    "mov  r24, r19            \n\t"
+    "andi r24, 0xF0           \n\t"
+    "or   r18, r24            \n\t"
+    "andi r19, 0x0F           \n\t"
+    "32: sbrs r20, 1          \n\t"
     "rjmp 27f                 \n\t"
     "com  r19                 \n\t"   /* negative half */
     "neg  r18                 \n\t"
@@ -918,14 +1008,36 @@ inline __attribute__((noinline)) void Fm4Op::RenderAsm(
     "adc  r19, r23            \n\t"
     "26: cpi  r19, 0x0D       \n\t"   /* a >= kFmSilent: 0 */
     "brsh 28f                 \n\t"
-    "movw r30, r18            \n\t"   /* v = exp_[a] */
+    "mov  r24, r19            \n\t"   /* q = a >> 10; v = exp_[a & 0x3FF] >> 4q */
+    "lsr  r24                 \n\t"
+    "lsr  r24                 \n\t"
+    "andi r19, 0x03           \n\t"
+    "movw r30, r18            \n\t"
     "lsl  r30                 \n\t"
     "rol  r31                 \n\t"
     "subi r30, lo8(-(%[ex]))  \n\t"
     "sbci r31, hi8(-(%[ex]))  \n\t"
     "lpm  r18, Z+             \n\t"
     "lpm  r19, Z              \n\t"
-    "sbrs r20, 1              \n\t"
+    "tst  r24                 \n\t"
+    "breq 32f                 \n\t"
+    "cpi  r24, 2              \n\t"
+    "brlo 31f                 \n\t"
+    "mov  r18, r19            \n\t"   /* >> 8 */
+    "clr  r19                 \n\t"
+    "cpi  r24, 3              \n\t"
+    "brne 32f                 \n\t"
+    "swap r18                 \n\t"   /* and >> 4 more: q == 3 */
+    "andi r18, 0x0F           \n\t"
+    "rjmp 32f                 \n\t"
+    "31: swap r18             \n\t"   /* >> 4 */
+    "andi r18, 0x0F           \n\t"
+    "swap r19                 \n\t"
+    "mov  r24, r19            \n\t"
+    "andi r24, 0xF0           \n\t"
+    "or   r18, r24            \n\t"
+    "andi r19, 0x0F           \n\t"
+    "32: sbrs r20, 1          \n\t"
     "rjmp 27f                 \n\t"
     "com  r19                 \n\t"   /* negative half */
     "neg  r18                 \n\t"

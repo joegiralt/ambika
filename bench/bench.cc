@@ -107,12 +107,13 @@ volatile uint16_t fmtest_blocks = 0;
 volatile uint16_t fmtest_mismatches = 0;
 volatile uint16_t fmtest_first[4];  // algorithm, set, sample, c value, asm value
 static void FmTest() {
-  static const uint8_t waves[3][4] = {{0,0,0,0},{1,2,3,4},{5,6,7,1}};
-  static const uint16_t atts[3][4] = {{0,0,0,0},{0x100,0x200,0x080,0x300},{0x000,0xD00,0x600,0x040}};
+  // The last set puts attenuations in every runtime shift range of exp_.
+  static const uint8_t waves[4][4] = {{0,0,0,0},{1,2,3,4},{5,6,7,1},{0,1,0,2}};
+  static const uint16_t atts[4][4] = {{0,0,0,0},{0x100,0x200,0x080,0x300},{0x000,0xD00,0x600,0x040},{0x680,0x4C0,0x7F0,0x300}};
   static uint16_t out_c[20], out_a[20];
   Fm4Op c, a;
   for (uint8_t alg = 0; alg < 8; ++alg) {
-    for (uint8_t set = 0; set < 3; ++set) {
+    for (uint8_t set = 0; set < 4; ++set) {
       for (uint8_t fbi = 0; fbi < 3; ++fbi) {
         uint16_t gain = fbi == 0 ? 0 : (fbi == 1 ? 0x0800 : 0xFFFF);
         c.Init(); a.Init();
