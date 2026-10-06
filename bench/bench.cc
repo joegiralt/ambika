@@ -62,6 +62,73 @@ volatile uint8_t dbg_vca = 0, dbg_env2 = 0, dbg_engine = 0, dbg_rx = 0;
 
 void __attribute__((noinline)) bench_done() { asm volatile("nop"); }
 
+#ifdef BENCH_SUBTEST
+#define SUB_OSCILLATOR_NO_DEFINITIONS
+#include "voicecard/sub_oscillator.h"
+volatile uint16_t subtest_blocks = 0;
+volatile uint16_t subtest_mismatches = 0;
+volatile uint16_t subtest_first[3];
+static uint8_t sub_c[kAudioBlockSize], sub_a[kAudioBlockSize];
+static void SubTest() {
+  static const uint8_t shapes[3] = { 0, 1, 4 };
+  static const uint8_t amounts[2] = { 30, 127 };
+  for (uint8_t sh = 0; sh < 3; ++sh) {
+    for (uint8_t am = 0; am < 2; ++am) {
+      uint24_t inc; inc.integral = 0x0234 + sh * 0x301; inc.fractional = 0x77;
+      SubOscillator so;
+      so.set_increment(inc);
+      for (uint8_t blk = 0; blk < 3; ++blk) {
+        for (uint8_t i = 0; i < kAudioBlockSize; ++i) { sub_c[i] = (i * 37 + blk * 11) & 0xFF; sub_a[i] = sub_c[i]; }
+        uint24_t ph = SubOscillator::phase();
+        SubOscillator::force_c_loop_ = 1; so.Render(shapes[sh], sub_c, amounts[am]);
+        uint24_t ph_c = SubOscillator::phase();
+        SubOscillator::set_phase(ph);
+        SubOscillator::force_c_loop_ = 0; so.Render(shapes[sh], sub_a, amounts[am]);
+        uint24_t ph_a = SubOscillator::phase();
+        ++subtest_blocks;
+        if (ph_c.integral != ph_a.integral || ph_c.fractional != ph_a.fractional) ++subtest_mismatches;
+        for (uint8_t k = 0; k < kAudioBlockSize; ++k) {
+          if (sub_c[k] != sub_a[k]) {
+            if (!subtest_mismatches) { subtest_first[0] = sh * 16 + am; subtest_first[1] = sub_c[k]; subtest_first[2] = sub_a[k]; }
+            ++subtest_mismatches;
+          }
+        }
+      }
+    }
+  }
+}
+#endif
+#ifdef BENCH_PMTEST
+volatile uint16_t pmtest_blocks = 0;
+volatile uint16_t pmtest_mismatches = 0;
+volatile uint16_t pmtest_first[3];
+static uint8_t pm_in[kAudioBlockSize];
+static uint16_t pm_ref[kAudioBlockSize];
+static void PmTest() {
+  static const uint8_t gains[4][4] = { {255, 0, 255, 0}, {200, 55, 255, 0}, {255, 0, 100, 155}, {128, 127, 0, 255} };
+  for (uint8_t g = 0; g < 4; ++g) {
+    for (uint8_t blk = 0; blk < 3; ++blk) {
+      for (uint8_t i = 0; i < kAudioBlockSize; ++i) pm_in[i] = (i * 53 + blk * 7 + g) & 0xFF;
+      uint8_t w = blk == 1 ? 100 : 8;
+      AudioRing::write_ptr_ = w;
+      Voice::PostMixC(pm_in, 0x5A + blk, gains[g][0], gains[g][1], gains[g][2], gains[g][3]);
+      for (uint8_t k = 0; k < kAudioBlockSize; ++k) pm_ref[k] = AudioRing::buffer_[(w + k) & 127];
+      uint8_t wp_c = AudioRing::write_ptr_;
+      AudioRing::write_ptr_ = w;
+      Voice::PostMixAsm(pm_in, 0x5A + blk, gains[g][0], gains[g][1], gains[g][2], gains[g][3]);
+      ++pmtest_blocks;
+      if (AudioRing::write_ptr_ != wp_c) ++pmtest_mismatches;
+      for (uint8_t k = 0; k < kAudioBlockSize; ++k) {
+        uint16_t a = AudioRing::buffer_[(w + k) & 127];
+        if (a != pm_ref[k]) {
+          if (!pmtest_mismatches) { pmtest_first[0] = g * 64 + k; pmtest_first[1] = pm_ref[k]; pmtest_first[2] = a; }
+          ++pmtest_mismatches;
+        }
+      }
+    }
+  }
+}
+#endif
 #ifdef BENCH_WCTEST
 // WestCoast::RenderC against RenderAsm: both from Init, same parameters,
 // over waveform x fm x sync x colour x sub x (bias, symmetry), four blocks.
@@ -142,13 +209,14 @@ static uint8_t osc_buf_c[kAudioBlockSize], osc_buf_a[kAudioBlockSize];
 static uint8_t osc_nosync[kAudioBlockSize], osc_syncout[kAudioBlockSize];
 static Oscillator c, a;  // per-instance state, zeroed per configuration
 static void OscTest() {
-  static const uint8_t shapes[2] = { WAVEFORM_SAW, WAVEFORM_SQUARE };
+  static const uint8_t shapes[3] = { WAVEFORM_SAW, WAVEFORM_SQUARE, WAVEFORM_SQUARE };
   static const uint8_t notes[3] = { 36, 57, 84 };
   static const uint8_t params[3] = { 0, 40, 200 };
-  for (uint8_t sh = 0; sh < 2; ++sh) {
+  for (uint8_t sh = 0; sh < 3; ++sh) {
     for (uint8_t nt = 0; nt < 3; ++nt) {
       for (uint8_t pr = 0; pr < 3; ++pr) {
-        uint8_t param = shapes[sh] == WAVEFORM_SQUARE ? 0 : params[pr];
+        // sh 1: square at pulse width 0 (wavetable); sh 2: PWM
+        uint8_t param = sh == 1 ? 0 : (sh == 2 ? 40 + pr * 80 : params[pr]);
         uint24_t inc; inc.integral = 0x0123 * (nt + 1) + pr * 77; inc.fractional = 0x45 + nt;
         memset(&c, 0, sizeof(c)); memset(&a, 0, sizeof(a));
         c.set_parameter(param); a.set_parameter(param);
@@ -249,6 +317,18 @@ int main(void) {
   sei();
 #ifdef BENCH_OPTEST
   OperatorTest();
+  done = 1;
+  bench_done();
+  while (1) { }
+#endif
+#ifdef BENCH_SUBTEST
+  SubTest();
+  done = 1;
+  bench_done();
+  while (1) { }
+#endif
+#ifdef BENCH_PMTEST
+  PmTest();
   done = 1;
   bench_done();
   while (1) { }

@@ -736,6 +736,104 @@ inline void Voice::UpdateDestinations() {
 }
 
 /* static */
+// The classic post-mix: noise mixed in, then the distortion table, then the
+// 8-bit result widened into the audio ring. PostMixC is the reference and
+// the host version; PostMixAsm writes into the ring directly (bench/
+// BENCH_PMTEST compares them).
+void Voice::PostMixC(const uint8_t* in, uint8_t noise, uint8_t signal_gain,
+                     uint8_t noise_gain, uint8_t post_dry, uint8_t post_wet) {
+  for (uint8_t i = 0; i < kAudioBlockSize;) {
+    uint8_t signal_noise_a, signal_noise_b;
+    noise = (noise * 73) + 1;
+    signal_noise_a = U8Mix(in[i++], noise, signal_gain, noise_gain);
+    uint8_t a = U8Mix(
+        signal_noise_a,
+        ResourcesManager::Lookup<uint8_t, uint8_t>(
+            wav_res_distortion, signal_noise_a),
+        post_dry, post_wet);
+    noise = (noise * 73) + 1;
+    signal_noise_b = U8Mix(in[i++], noise, signal_gain, noise_gain);
+    uint8_t b = U8Mix(
+        signal_noise_b,
+        ResourcesManager::Lookup<uint8_t, uint8_t>(
+            wav_res_distortion, signal_noise_b),
+        post_dry, post_wet);
+    // The classic engine is 8-bit: shift up to the DAC's 12 bits.
+    audio_buffer.Overwrite2(static_cast<uint16_t>(a) << 4,
+                            static_cast<uint16_t>(b) << 4);
+  }
+}
+
+#ifdef __AVR__
+void Voice::PostMixAsm(const uint8_t* in, uint8_t noise, uint8_t signal_gain,
+                       uint8_t noise_gain, uint8_t post_dry, uint8_t post_wet) {
+  uint16_t* dst = &AudioRing::buffer_[AudioRing::write_ptr_];
+  uint8_t n = kAudioBlockSize;
+  uint8_t k73 = 73, sn, d, hi;
+  uint16_t lo;
+  // Y is gcc's frame pointer: saved by hand and used as the ring pointer.
+  asm volatile(
+    "push r28                 \n\t"
+    "push r29                 \n\t"
+    "movw r28, %A[dst]        \n\t"
+    "1:                       \n\t"
+    "mul  %[noise], %[k73]    \n\t"   /* noise = noise * 73 + 1 */
+    "mov  %[noise], r0        \n\t"
+    "inc  %[noise]            \n\t"
+    "ld   %[sn], X+           \n\t"   /* U8Mix(in, noise, sg, ng) */
+    "mul  %[sn], %[sg]        \n\t"
+    "movw %A[lo], r0          \n\t"
+    "mul  %[noise], %[ng]     \n\t"
+    "add  %A[lo], r0          \n\t"
+    "adc  %B[lo], r1          \n\t"
+    "mov  %[sn], %B[lo]       \n\t"
+    "mov  r30, %[sn]          \n\t"   /* d = distortion[sn] */
+    "ldi  r31, 0              \n\t"
+    "add  r30, %A[tbl]        \n\t"
+    "adc  r31, %B[tbl]        \n\t"
+    "lpm  %[d], Z             \n\t"
+    "mul  %[sn], %[dry]       \n\t"   /* a = U8Mix(sn, d, dry, wet) */
+    "movw %A[lo], r0          \n\t"
+    "mul  %[d], %[wet]        \n\t"
+    "add  %A[lo], r0          \n\t"
+    "adc  %B[lo], r1          \n\t"
+    "mov  %[d], %B[lo]        \n\t"
+    "mov  %[hi], %[d]         \n\t"   /* a << 4, two bytes */
+    "swap %[hi]               \n\t"
+    "andi %[hi], 0x0F         \n\t"
+    "swap %[d]                \n\t"
+    "andi %[d], 0xF0          \n\t"
+    "st   Y+, %[d]            \n\t"
+    "st   Y+, %[hi]           \n\t"
+    "cp   r28, %A[end]        \n\t"   /* wrap at the end of the ring */
+    "cpc  r29, %B[end]        \n\t"
+    "brne 2f                  \n\t"
+    "movw r28, %A[start]      \n\t"
+    "2: dec  %[n]             \n\t"
+    "brne 1b                  \n\t"
+    "eor  r1, r1              \n\t"
+    "pop  r29                 \n\t"
+    "pop  r28                 \n\t"
+    : [noise] "+a" (noise), [n] "+r" (n), [sn] "=&a" (sn), [d] "=&d" (d),
+      [lo] "=&r" (lo), [hi] "=&d" (hi), "+x" (in)
+    : [dst] "r" (dst), [sg] "a" (signal_gain), [ng] "a" (noise_gain),
+      [dry] "a" (post_dry), [wet] "a" (post_wet), [k73] "a" (k73),
+      [tbl] "r" (wav_res_distortion),
+      [end] "r" (&AudioRing::buffer_[128]), [start] "r" (AudioRing::buffer_)
+    : "r0", "r1", "r30", "r31", "cc", "memory");
+  AudioRing::write_ptr_ = (AudioRing::write_ptr_ + kAudioBlockSize) & 127;
+}
+#endif
+
+void Voice::PostMix(const uint8_t* in, uint8_t noise, uint8_t signal_gain,
+                    uint8_t noise_gain, uint8_t post_dry, uint8_t post_wet) {
+#ifdef __AVR__
+  PostMixAsm(in, noise, signal_gain, noise_gain, post_dry, post_wet);
+#else
+  PostMixC(in, noise, signal_gain, noise_gain, post_dry, post_wet);
+#endif
+}
+
 void Voice::ExpandHalfRateC() {
   // The first half of render_.wide holds a block rendered at half the sample
   // rate. Expand it in place, back to front. Repeating samples would mirror
@@ -1225,29 +1323,8 @@ void Voice::ProcessBlock() {
       return;
     }
 
-    // Mix with noise, and apply distortion. The loop processes samples by 2 to
-    // avoid some of the overhead of audio_buffer.Overwrite()
-    for (uint8_t i = 0; i < kAudioBlockSize;) {
-      uint8_t signal_noise_a, signal_noise_b;
-      noise = (noise * 73) + 1;
-      signal_noise_a = U8Mix(render_.narrow.osc1[i++], noise, signal_gain, noise_gain);
-      uint8_t a = U8Mix(
-          signal_noise_a,
-          ResourcesManager::Lookup<uint8_t, uint8_t>(
-              wav_res_distortion, signal_noise_a),
-          post_dry, post_wet);
-
-      noise = (noise * 73) + 1;
-      signal_noise_b = U8Mix(render_.narrow.osc1[i++], noise, signal_gain, noise_gain);
-      uint8_t b = U8Mix(
-            signal_noise_b,
-            ResourcesManager::Lookup<uint8_t, uint8_t>(
-                wav_res_distortion, signal_noise_b),
+    PostMix(render_.narrow.osc1, noise, signal_gain, noise_gain,
             post_dry, post_wet);
-      // The classic engine is 8-bit: shift up to the DAC's 12 bits.
-      audio_buffer.Overwrite2(static_cast<uint16_t>(a) << 4,
-                              static_cast<uint16_t>(b) << 4);
-    }
   }
   BENCH_MARK(4);
 }

@@ -96,6 +96,91 @@ void Oscillator::RenderBandlimitedPwm(uint8_t* buffer) {
     scale = U8Mix(scale, 102, (note_ - 52) << 2);
   }
   phase_increment_ = U24ShiftLeft(phase_increment_);
+#if defined(__AVR__)
+#ifdef BENCH_OSCTEST
+  if (!force_c_loop_ && !sync_) {
+#else
+  if (!sync_) {
+#endif
+    // The loop below without the sync bookkeeping, as one block: avrlib's
+    // InterpolateSample, U8Mix and U8U8MulShift8 arithmetic exactly
+    // (BENCH_OSCTEST compares them). About 110 cycles a pair from 250.
+    uint8_t pf = phase_.fractional;
+    uint16_t pi = phase_.integral;
+    uint8_t n = kAudioBlockSize >> 1;
+    uint8_t s1, s2, fr, va;
+    uint16_t q;
+    asm volatile(
+      "1:                       \n\t"
+      "add  %[pf], %[inf]       \n\t"   /* phase += increment */
+      "adc  %A[pi], %A[ini]     \n\t"
+      "adc  %B[pi], %B[ini]     \n\t"
+      "movw %A[q], %A[pi]       \n\t"   /* a: tables at phase */
+      "rcall 20f                \n\t"
+      "mov  %[va], %[s1]        \n\t"
+      "movw %A[q], %A[pi]       \n\t"   /* b: tables at phase + shift */
+      "add  %A[q], %A[sh]       \n\t"
+      "adc  %B[q], %B[sh]       \n\t"
+      "rcall 20f                \n\t"
+      "sub  %[va], %[s1]        \n\t"   /* a - b + 128 */
+      "subi %[va], 0x80         \n\t"
+      "st   X+, %[va]           \n\t"
+      "st   X+, %[va]           \n\t"
+      "dec  %[n]                \n\t"
+      "brne 1b                  \n\t"
+      "rjmp 29f                 \n\t"
+      /* subroutine: s1 = U8U8MulShift8(U8Mix(IS(w1, q), IS(w2, q), g1, g2), scale) */
+      "20: movw r30, %A[w1]     \n\t"
+      "add  r30, %B[q]          \n\t"
+      "adc  r31, r1             \n\t"
+      "mov  %[fr], %A[q]        \n\t"
+      "lpm  %[s1], Z+           \n\t"
+      "lpm  r1, Z               \n\t"
+      "mul  %[fr], r1           \n\t"
+      "movw r30, r0             \n\t"
+      "com  %[fr]               \n\t"
+      "mul  %[fr], %[s1]        \n\t"
+      "add  r30, r0             \n\t"
+      "adc  r31, r1             \n\t"
+      "mov  %[s1], r31          \n\t"
+      "eor  r1, r1              \n\t"
+      "movw r30, %A[w2]         \n\t"
+      "add  r30, %B[q]          \n\t"
+      "adc  r31, r1             \n\t"
+      "mov  %[fr], %A[q]        \n\t"
+      "lpm  %[s2], Z+           \n\t"
+      "lpm  r1, Z               \n\t"
+      "mul  %[fr], r1           \n\t"
+      "movw r30, r0             \n\t"
+      "com  %[fr]               \n\t"
+      "mul  %[fr], %[s2]        \n\t"
+      "add  r30, r0             \n\t"
+      "adc  r31, r1             \n\t"
+      "mov  %[s2], r31          \n\t"
+      "mul  %[s1], %[g1]        \n\t"   /* U8Mix(s1, s2, g1, g2) */
+      "movw r30, r0             \n\t"
+      "mul  %[s2], %[g2]        \n\t"
+      "add  r30, r0             \n\t"
+      "adc  r31, r1             \n\t"
+      "mul  r31, %[sc]          \n\t"   /* U8U8MulShift8(mix, scale) */
+      "mov  %[s1], r1           \n\t"
+      "eor  r1, r1              \n\t"
+      "ret                      \n\t"
+      "29:                      \n\t"
+      : [pf] "+r" (pf), [pi] "+r" (pi), [buf] "+x" (buffer), [n] "+r" (n),
+        [s1] "=&r" (s1), [s2] "=&r" (s2), [fr] "=&r" (fr), [va] "=&d" (va),
+        [q] "=&r" (q)
+      : [inf] "r" (phase_increment_.fractional),
+        [ini] "r" (phase_increment_.integral),
+        [w1] "r" (wave_1), [w2] "r" (wave_2),
+        [g1] "r" (gain_1), [g2] "r" (gain_2), [sc] "r" (scale),
+        [sh] "r" (shift)
+      : "r0", "r1", "r30", "r31", "cc", "memory");
+    phase_.fractional = pf;
+    phase_.integral = pi;
+    return;
+  }
+#endif
   BEGIN_SAMPLE_LOOP
     phase = U24AddC(phase, phase_increment_int);
     *sync_output_++ = phase.carry;

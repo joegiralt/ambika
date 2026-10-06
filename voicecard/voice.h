@@ -89,6 +89,14 @@ class Voice {
   // Half-rate expansion (see voice.cc). Public for bench/.
   static void ExpandHalfRateC();
   static uint16_t* render_wide() { return render_.wide; }  // bench/
+  static void PostMix(const uint8_t* in, uint8_t noise, uint8_t signal_gain,
+                      uint8_t noise_gain, uint8_t post_dry, uint8_t post_wet);
+  static void PostMixC(const uint8_t* in, uint8_t noise, uint8_t signal_gain,
+                       uint8_t noise_gain, uint8_t post_dry, uint8_t post_wet);
+#ifdef __AVR__
+  static void PostMixAsm(const uint8_t* in, uint8_t noise, uint8_t signal_gain,
+                         uint8_t noise_gain, uint8_t post_dry, uint8_t post_wet);
+#endif
 #ifdef __AVR__
   static void ExpandHalfRateToRing();
 #endif

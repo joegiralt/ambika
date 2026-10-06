@@ -58,18 +58,21 @@ the bench's sample-for-sample comparison against the C reference):
 | `Fm4Op::RenderAsm`: phases in registers, inlined operators | 17,800 | 19,900 | 20,300 | |
 | classic: no-sync oscillator loop; envelope parameter cache | 16,900 | | | saw+saw 23,700 -> 21,330 |
 | classic: assembly saw/square loop, sub osc skipped at zero gain, pad phases in registers | | | | saw+saw 14,500; pad+PWM+sub+noise+fuzz 24,350 -> 23,500 |
+| exp table to 4 shifts (flash 32,170 -> 27,738); aligned tables; cached FM increments | 15,350 | 18,500 | 18,800 | |
+| expansion in assembly straight into the ring (FM, KS, WC) | 13,950 | | | KS 15,600; West Coast all-on 20,800 |
+| West Coast render in assembly | | | | West Coast all-on 13,600 |
+| classic: PWM loop, noise/fuzz post-mix and sub oscillator in assembly | | | | pad+PWM+sub+noise+fuzz 17,100; PWM alone 12,050 |
+
+As of commit after 9757576: every patch tried is under budget by at least
+16 %. Each assembly loop has a bench comparison against the C version it
+replaced (`BENCH_OPTEST`, `FMTEST`, `EXPTEST`, `WCTEST`, `OSCTEST`,
+`SUBTEST`, `PMTEST`); run them after touching any of it.
 
 Hardware, build 5f5bb0a: FM bare sine 0 bursts/s at A2/A3/A5, LatelyBass 0,
 DynoWurlie 0.3/s (from 103). The classic sine's buzz was a 16-bit wrap in
 the sine interpolation (d1756e9), not CPU. Classic saw+saw is still 5 %
-over in the simulator; the pad patch more. Flash is at 32,170 of 32,256
-and RAM at 1,857 of 2,048. The heavy classic patch (pad + PWM square + sub
-+ noise + fuzz) is still 15 % over; its remaining costs are the PWM loop,
-the noise/fuzz post-mix and the sub oscillator with gain, all of which want
-assembly and none of which fit. The way to free flash is the FM `exp_`
-table: 13 pre-shifted copies of a 256-entry table (6.6 KB) could be one copy
-plus a runtime shift by the attenuation's integer part, about 1,000 cycles
-a block on FM, which now has the margin.
+over in the simulator; the pad patch more. Flash is at 28,944 of 32,256 after the exp table went to four shifts, and
+RAM at 1,867 of 2,048.
 
 What the FM sine block is now: control rate 2,900, render 8,800, expansion
 1,570, ring write 750, ISR 3,800, loop overhead the rest.
