@@ -988,19 +988,43 @@ inline void Voice::UpdateDestinations() {
 /* static */
 void Voice::ExpandHalfRate() {
   // The first half of render_.wide holds a block rendered at half the sample
-  // rate. Expand it in place, back to front, with the midpoint between
-  // neighbours: repeating samples would mirror the whole spectrum into
-  // 9.8-19.6 kHz as a high-end fizz on every note.
+  // rate. Expand it in place, back to front. Repeating samples would mirror
+  // the whole spectrum into 9.8-19.6 kHz; the midpoint between neighbours
+  // leaves that image only about 10 dB down, which is the fizz on the high
+  // end of bright FM. A four point fit through the three previous samples and
+  // the current one puts it roughly 17 dB further down around 1.8 kHz, where
+  // most of the energy is, and needs no lookahead so the block boundary is
+  // not a special case.
+  //
+  // y = (s3 - 5*s2 + 15*s1 + 5*s0) / 16, rearranged to
+  // y = s1 + (s3 - s1 + 5*(s0 - s2)) / 16 so the arithmetic fits in int16:
+  // the direct form reaches about 86000.
   uint16_t* buffer = render_.wide;
-  static uint16_t previous = 2048;
-  uint16_t last = buffer[(kAudioBlockSize >> 1) - 1];
-  for (uint8_t i = kAudioBlockSize >> 1; i--; ) {
-    uint16_t current = buffer[i];
-    uint16_t before = i ? buffer[i - 1] : previous;
-    buffer[2 * i + 1] = current;
-    buffer[2 * i] = (before + current) >> 1;
+  const uint8_t half = kAudioBlockSize >> 1;
+  // Newest three samples of the previous block, oldest last.
+  static uint16_t history[3] = { 2048, 2048, 2048 };
+  uint16_t keep[3] = { buffer[half - 1], buffer[half - 2], buffer[half - 3] };
+  for (uint8_t i = half; i--; ) {
+    uint16_t s0 = buffer[i];
+    uint16_t s1 = i >= 1 ? buffer[i - 1] : history[0 - i];
+    uint16_t s2 = i >= 2 ? buffer[i - 2] : history[1 - i];
+    uint16_t s3 = i >= 3 ? buffer[i - 3] : history[2 - i];
+    int16_t correction = (static_cast<int16_t>(s3) - static_cast<int16_t>(s1));
+    int16_t d = static_cast<int16_t>(s0) - static_cast<int16_t>(s2);
+    correction += d * 5;                     // shift-add on avr-gcc; d can be
+                                             // negative, so no literal shift
+    int16_t y = static_cast<int16_t>(s1) + (correction >> 4);
+    if (y < 0) {
+      y = 0;
+    } else if (y > 4095) {
+      y = 4095;
+    }
+    buffer[2 * i + 1] = s0;
+    buffer[2 * i] = y;
   }
-  previous = last;
+  history[0] = keep[0];
+  history[1] = keep[1];
+  history[2] = keep[2];
 }
 
 /* static */
