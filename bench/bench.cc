@@ -62,6 +62,42 @@ volatile uint8_t dbg_vca = 0, dbg_env2 = 0, dbg_engine = 0, dbg_rx = 0;
 
 void __attribute__((noinline)) bench_done() { asm volatile("nop"); }
 
+#ifdef BENCH_WCTEST
+// WestCoast::RenderC against RenderAsm: both from Init, same parameters,
+// over waveform x fm x sync x colour x sub x (bias, symmetry), four blocks.
+#include "voicecard/westcoast.h"
+volatile uint16_t wctest_blocks = 0;
+volatile uint16_t wctest_mismatches = 0;
+volatile uint16_t wctest_first[4];
+static WestCoast wc_c, wc_a;
+static uint16_t wc_out_c[20], wc_out_a[20];
+static void WcTest() {
+  for (uint8_t cfg = 0; cfg < 64; ++cfg) {
+    uint8_t wave = cfg & 1;
+    uint8_t fm = (cfg & 2) ? 60 : 0;
+    uint8_t sync = (cfg & 4) ? 40 : 0;
+    uint8_t color = (cfg & 8) ? 127 : 60;
+    uint8_t sub = (cfg & 16) ? 50 : 0;
+    uint8_t bias = (cfg & 32) ? 20 : 64, sym = (cfg & 32) ? 100 : 64;
+    uint8_t fold = (cfg & 32) ? 110 : 40;
+    wc_c.Init(); wc_a.Init();
+    for (uint8_t blk = 0; blk < 4; ++blk) {
+      uint32_t inc = 0x00012345UL + blk * 0x111 + cfg * 7;
+      wc_c.RenderC(wave, fold, sym, bias, fm, (cfg & 2) ? 2 : -1, 30, color, 20, 40,
+                   sub, sync, 200 - blk * 30, inc, wc_out_c, 20);
+      wc_a.RenderAsm(wave, fold, sym, bias, fm, (cfg & 2) ? 2 : -1, 30, color, 20, 40,
+                     sub, sync, 200 - blk * 30, inc, wc_out_a, 20);
+      ++wctest_blocks;
+      for (uint8_t k = 0; k < 20; ++k) {
+        if (wc_out_c[k] != wc_out_a[k]) {
+          if (!wctest_mismatches) { wctest_first[0] = cfg; wctest_first[1] = blk * 32 + k; wctest_first[2] = wc_out_c[k]; wctest_first[3] = wc_out_a[k]; }
+          ++wctest_mismatches;
+        }
+      }
+    }
+  }
+}
+#endif
 #ifdef BENCH_EXPTEST
 // ExpandHalfRateToRing against ExpandHalfRateC: same input and history,
 // output read back from the ring, one block starting near the ring's end.
@@ -213,6 +249,12 @@ int main(void) {
   sei();
 #ifdef BENCH_OPTEST
   OperatorTest();
+  done = 1;
+  bench_done();
+  while (1) { }
+#endif
+#ifdef BENCH_WCTEST
+  WcTest();
   done = 1;
   bench_done();
   while (1) { }

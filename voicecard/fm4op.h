@@ -111,6 +111,12 @@ class Fm4Op {
  public:
   Fm4Op() { }
 
+#ifdef __AVR__
+  // Block parameters for RenderAsm; static so the loop owns Y. Public: the
+  // West Coast render reuses the same block.
+  static struct FmRenderParams params_;
+#endif
+
   void Init() {
 #ifdef FM_PHASE_DITHER
     dither_ = 0xACE1;
@@ -358,8 +364,6 @@ class Fm4Op {
   // outputs (bit j = op j+1) feed its phase; then the carriers. Op 4 has
   // the feedback only. Same routing as the switch in Sample().
   static const prog_uint8_t routing_[8][4] PROGMEM;
-  // Static so RenderAsm has no stack frame: the loop owns Y.
-  static struct FmRenderParams params_;
 #endif
 
   // TX81Z frequency ratio table — 64 entries, 8.8 fixed-point.
