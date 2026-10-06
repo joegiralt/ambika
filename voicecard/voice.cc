@@ -71,6 +71,10 @@ KarplusStrong Voice::karplus_;
 WestCoast Voice::westcoast_;
 uint8_t Voice::last_engine_ = 0xFF;
 
+// The half-rate engines render into render_.wide after this many samples of
+// history, so the expansion's window is the buffer itself (see ExpandHalfRate).
+static const uint8_t kExpandHistory = 5;
+
 // Cache for the FM operator increments (see RenderOscillators).
 static int16_t fm_last_pitch = 0x7FFF;
 static uint8_t fm_last_ratio[4], fm_last_detune[4];
@@ -836,122 +840,147 @@ void Voice::PostMix(const uint8_t* in, uint8_t noise, uint8_t signal_gain,
 
 void Voice::ExpandHalfRateC() {
   // The first half of render_.wide holds a block rendered at half the sample
-  // rate. Expand it in place, back to front. Repeating samples would mirror
-  // the whole spectrum into 9.8-19.6 kHz; the midpoint between neighbours
-  // leaves that image only about 10 dB down, which is the fizz on the high
-  // end of bright FM. A four point fit through the three previous samples and
-  // the current one puts it roughly 17 dB further down around 1.8 kHz, where
-  // most of the energy is, and needs no lookahead so the block boundary is
-  // not a special case.
-  //
-  // y = (s3 - 5*s2 + 15*s1 + 5*s0) / 16, rearranged to
-  // y = s1 + (s3 - s1 + 5*(s0 - s2)) / 16 so the arithmetic fits in int16:
-  // the direct form reaches about 86000.
-  uint16_t* buffer = render_.wide;
+  // rate. The gap between s[n] and s[n+1] is filled with a 6-tap half-band
+  // interpolator, (35, -233, 1222, 1222, -233, 35) / 2048: it needs three
+  // samples of lookahead, so the output lags by six full-rate samples
+  // (150 us) and the last five inputs of each block wait in history. Images
+  // of a 3.5 kHz partial land 55 dB down (the previous four-point fit: 31),
+  // at 7 kHz 18 dB (10).
   const uint8_t half = kAudioBlockSize >> 1;
-  // Newest three samples of the previous block, oldest last.
-  static uint16_t history[3] = { 2048, 2048, 2048 };
-  uint16_t keep0 = buffer[half - 1], keep1 = buffer[half - 2],
-           keep2 = buffer[half - 3];
-  // Sliding window: s0 is the newest. One load per output pair; the three
-  // oldest pairs read the history and are peeled off the loop.
-  int16_t s0 = buffer[half - 1], s1 = buffer[half - 2], s2 = buffer[half - 3];
-  int16_t s3;
-  uint16_t* out = buffer + kAudioBlockSize;  // writes run back to front
-#define EXPAND_PAIR()                                             \
-  {                                                               \
-    int16_t correction = s3 - s1;                                 \
-    int16_t d = s0 - s2;                                          \
-    correction += d * 5;                                          \
-    int16_t y = s1 + (correction >> 4);                           \
-    if (y < 0) y = 0; else if (y > 4095) y = 4095;                \
-    *--out = s0;                                                  \
-    *--out = y;                                                   \
+  const uint8_t kHistory = kExpandHistory;
+  static uint16_t history[kHistory] = { 2048, 2048, 2048, 2048, 2048 };
+  // Window: history, then this block's samples, which the engine rendered
+  // at wide[kHistory] onwards.
+  uint16_t* win = render_.wide;
+  memcpy(win, history, sizeof(history));
+  uint16_t out[kAudioBlockSize];
+  for (uint8_t n = 0; n < half; ++n) {
+    // s[n] = win[n + 2]; the pair s[n], s[n+1] is win[n+2], win[n+3]
+    const uint16_t* w = win + n;
+    int32_t acc = 1222L * (static_cast<int32_t>(w[2]) + w[3])
+                - 233L * (static_cast<int32_t>(w[1]) + w[4])
+                + 35L * (static_cast<int32_t>(w[0]) + w[5]);
+    int16_t y = static_cast<int16_t>(acc >> 11);
+    if (y < 0) y = 0; else if (y > 4095) y = 4095;
+    out[2 * n] = w[2];
+    out[2 * n + 1] = y;
   }
-  for (uint8_t i = half - 1; i >= 3; --i) {
-    s3 = buffer[i - 3];
-    EXPAND_PAIR();
-    s0 = s1; s1 = s2; s2 = s3;
-  }
-  s3 = history[0]; EXPAND_PAIR(); s0 = s1; s1 = s2; s2 = s3;   // i = 2
-  s3 = history[1]; EXPAND_PAIR(); s0 = s1; s1 = s2; s2 = s3;   // i = 1
-  s3 = history[2]; EXPAND_PAIR();                              // i = 0
-#undef EXPAND_PAIR
-  history[0] = keep0;
-  history[1] = keep1;
-  history[2] = keep2;
+  memcpy(history, win + half, sizeof(history));
+  audio_buffer.WriteBlock(out, kAudioBlockSize);
 }
 
 #ifdef __AVR__
-// The same fit, forward, written straight into the audio ring (wrapping at
-// 128) instead of in place and then copied: 1,570 + 700 cycles a block
-// become about 1,100. bench/ BENCH_EXPTEST checks it against ExpandHalfRateC.
+// The same filter, written straight into the audio ring (wrapping at 128).
+// bench/ BENCH_EXPTEST checks it against ExpandHalfRateC.
 void Voice::ExpandHalfRateToRing() {
-  static uint16_t history[3] = { 2048, 2048, 2048 };  // newest first
   const uint8_t half = kAudioBlockSize >> 1;
-  uint16_t* src = render_.wide;
+  const uint8_t kHistory = kExpandHistory;
+  static uint16_t history[kHistory] = { 2048, 2048, 2048, 2048, 2048 };
+  uint16_t* win = render_.wide;
+  memcpy(win, history, sizeof(history));
   uint16_t* dst = &AudioRing::buffer_[AudioRing::write_ptr_];
-  uint16_t s1 = history[0], s2 = history[1], s3 = history[2];
-  uint16_t s0, c, d;
   uint8_t n = half;
+  uint16_t a, b, p;     // pair sum, scratch, product
+  uint32_t acc;
   asm volatile(
+    "ldi  %B[p], 0            \n\t"   /* %B[p] stays 0: the carry register */
     "1:                       \n\t"
-    "ld   %A[s0], Z+          \n\t"
-    "ld   %B[s0], Z+          \n\t"
-    "movw %A[d], %A[s0]       \n\t"   /* d = s0 - s2 */
-    "sub  %A[d], %A[s2]       \n\t"
-    "sbc  %B[d], %B[s2]       \n\t"
-    "movw %A[c], %A[s3]       \n\t"   /* c = s3 - s1 + 5 * d */
-    "sub  %A[c], %A[s1]       \n\t"
-    "sbc  %B[c], %B[s1]       \n\t"
-    "add  %A[c], %A[d]        \n\t"
-    "adc  %B[c], %B[d]        \n\t"
-    "lsl  %A[d]               \n\t"
-    "rol  %B[d]               \n\t"
-    "lsl  %A[d]               \n\t"
-    "rol  %B[d]               \n\t"
-    "add  %A[c], %A[d]        \n\t"
-    "adc  %B[c], %B[d]        \n\t"
-    "asr  %B[c]               \n\t"   /* c >>= 4, arithmetic */
-    "ror  %A[c]               \n\t"
-    "asr  %B[c]               \n\t"
-    "ror  %A[c]               \n\t"
-    "asr  %B[c]               \n\t"
-    "ror  %A[c]               \n\t"
-    "asr  %B[c]               \n\t"
-    "ror  %A[c]               \n\t"
-    "add  %A[c], %A[s1]       \n\t"   /* y = s1 + c, clipped to 0..4095 */
-    "adc  %B[c], %B[s1]       \n\t"
-    "sbrs %B[c], 7            \n\t"
+    /* s[n] = w[2]: first of the pair */
+    "ldd  %A[a], Z+4          \n\t"
+    "ldd  %B[a], Z+5          \n\t"
+    "st   X+, %A[a]           \n\t"
+    "st   X+, %B[a]           \n\t"
+    /* acc = 1222 * (w2 + w3): 1222 = 0x04C6 */
+    "ldd  %A[b], Z+6          \n\t"
+    "ldd  %B[b], Z+7          \n\t"
+    "add  %A[a], %A[b]        \n\t"
+    "adc  %B[a], %B[b]        \n\t"
+    "ldi  %A[p], 198          \n\t"   /* 1222 = 198 + 1024 */
+    "mul  %A[a], %A[p]        \n\t"
+    "movw %A[acc], r0         \n\t"
+    "clr  %C[acc]             \n\t"
+    "clr  %D[acc]             \n\t"
+    "mul  %B[a], %A[p]        \n\t"
+    "add  %B[acc], r0         \n\t"
+    "adc  %C[acc], r1         \n\t"
+    "adc  %D[acc], %B[p]      \n\t"
+    "lsl  %A[a]               \n\t"   /* + (sum << 10): sum << 2 at byte 1 */
+    "rol  %B[a]               \n\t"
+    "lsl  %A[a]               \n\t"
+    "rol  %B[a]               \n\t"
+    "add  %B[acc], %A[a]      \n\t"
+    "adc  %C[acc], %B[a]      \n\t"
+    "adc  %D[acc], %B[p]      \n\t"
+    /* acc -= 233 * (w1 + w4) */
+    "ldd  %A[a], Z+2          \n\t"
+    "ldd  %B[a], Z+3          \n\t"
+    "ldd  %A[b], Z+8          \n\t"
+    "ldd  %B[b], Z+9          \n\t"
+    "add  %A[a], %A[b]        \n\t"
+    "adc  %B[a], %B[b]        \n\t"
+    "ldi  %A[p], 0xE9         \n\t"
+    "mul  %A[a], %A[p]        \n\t"
+    "sub  %A[acc], r0         \n\t"
+    "sbc  %B[acc], r1         \n\t"
+    "sbc  %C[acc], %B[p]      \n\t"
+    "sbc  %D[acc], %B[p]      \n\t"
+    "mul  %B[a], %A[p]        \n\t"
+    "sub  %B[acc], r0         \n\t"
+    "sbc  %C[acc], r1         \n\t"
+    "sbc  %D[acc], %B[p]      \n\t"
+    /* acc += 35 * (w0 + w5) */
+    "ld   %A[a], Z            \n\t"
+    "ldd  %B[a], Z+1          \n\t"
+    "ldd  %A[b], Z+10         \n\t"
+    "ldd  %B[b], Z+11         \n\t"
+    "add  %A[a], %A[b]        \n\t"
+    "adc  %B[a], %B[b]        \n\t"
+    "ldi  %A[p], 35           \n\t"
+    "mul  %A[a], %A[p]        \n\t"
+    "add  %A[acc], r0         \n\t"
+    "adc  %B[acc], r1         \n\t"
+    "adc  %C[acc], %B[p]      \n\t"
+    "adc  %D[acc], %B[p]      \n\t"
+    "mul  %B[a], %A[p]        \n\t"
+    "add  %B[acc], r0         \n\t"
+    "adc  %C[acc], r1         \n\t"
+    "adc  %D[acc], %B[p]      \n\t"
+    "eor  r1, r1              \n\t"
+    /* y = acc >> 11, arithmetic: drop a byte, then three asr */
+    "mov  %A[a], %B[acc]      \n\t"
+    "mov  %B[a], %C[acc]      \n\t"
+    "mov  %A[b], %D[acc]      \n\t"
+    "asr  %A[b]               \n\t" "ror  %B[a]               \n\t" "ror  %A[a]               \n\t"
+    "asr  %A[b]               \n\t" "ror  %B[a]               \n\t" "ror  %A[a]               \n\t"
+    "asr  %A[b]               \n\t" "ror  %B[a]               \n\t" "ror  %A[a]               \n\t"
+    /* clip to 0..4095 (y is a 16-bit two's complement value in a) */
+    "sbrs %B[a], 7            \n\t"
     "rjmp 2f                  \n\t"
-    "clr  %A[c]               \n\t"
-    "clr  %B[c]               \n\t"
+    "clr  %A[a]               \n\t"
+    "clr  %B[a]               \n\t"
     "rjmp 3f                  \n\t"
-    "2: cpi  %B[c], 0x10      \n\t"
+    "2: cpi  %B[a], 0x10      \n\t"
     "brlo 3f                  \n\t"
-    "ldi  %A[c], 0xFF         \n\t"
-    "ldi  %B[c], 0x0F         \n\t"
-    "3: st   X+, %A[c]        \n\t"
-    "st   X+, %B[c]           \n\t"
-    "st   X+, %A[s0]          \n\t"
-    "st   X+, %B[s0]          \n\t"
-    "cp   r26, %A[end]        \n\t"   /* wrap at the end of the ring */
-    "cpc  r27, %B[end]        \n\t"
+    "ldi  %A[a], 0xFF         \n\t"
+    "ldi  %B[a], 0x0F         \n\t"
+    "3: st   X+, %A[a]        \n\t"
+    "st   X+, %B[a]           \n\t"
+    "cpi  r26, lo8(%[end])    \n\t"   /* wrap at the end of the ring */
+    "ldi  %A[p], hi8(%[end])  \n\t"
+    "cpc  r27, %A[p]          \n\t"
     "brne 4f                  \n\t"
-    "movw r26, %A[start]      \n\t"
-    "4: movw %A[s3], %A[s2]   \n\t"
-    "movw %A[s2], %A[s1]      \n\t"
-    "movw %A[s1], %A[s0]      \n\t"
+    "ldi  r26, lo8(%[start])  \n\t"
+    "ldi  r27, hi8(%[start])  \n\t"
+    "4: adiw r30, 2           \n\t"
     "dec  %[n]                \n\t"
-    "brne 1b                  \n\t"
-    : [s0] "=&r" (s0), [c] "=&d" (c), [d] "=&r" (d), [n] "+r" (n),
-      [s1] "+r" (s1), [s2] "+r" (s2), [s3] "+r" (s3),
-      "+x" (dst), "+z" (src)
-    : [end] "r" (&AudioRing::buffer_[128]), [start] "r" (AudioRing::buffer_)
-    : "cc", "memory");
-  history[0] = s1;
-  history[1] = s2;
-  history[2] = s3;
+    "breq 5f                  \n\t"   /* the loop is too long for brne */
+    "rjmp 1b                  \n\t"
+    "5:                       \n\t"
+    : [a] "=&d" (a), [b] "=&d" (b), [p] "=&d" (p), [acc] "=&r" (acc),
+      [n] "+r" (n), "+x" (dst), "+z" (win)
+    : [end] "i" (&AudioRing::buffer_[128]), [start] "i" (AudioRing::buffer_)
+    : "r0", "r1", "cc", "memory");
+  memcpy(history, render_.wide + half, sizeof(history));
   AudioRing::write_ptr_ = (AudioRing::write_ptr_ + kAudioBlockSize) & 127;
 }
 #endif
@@ -1063,7 +1092,7 @@ inline void Voice::RenderOscillators() {
     uint16_t feedback_gain = Fm4Op::FeedbackGain(patch_.padding[0]);
 
     fm4op_.Render(algorithm, op_waveform, op_att, feedback_gain,
-                  render_.wide, kAudioBlockSize >> kFmRateShift);
+                  render_.wide + kExpandHistory, kAudioBlockSize >> kFmRateShift);
     BENCH_MARK(2);
     if (kFmRateShift) {
       ExpandHalfRate();
@@ -1097,7 +1126,7 @@ inline void Voice::RenderOscillators() {
         dst_[MOD_DST_MIX_NOISE] >> 7,                // stiffness
         dst_[MOD_DST_MIX_FUZZ] >> 7,                 // sustain
         U15ShiftRight7(dst_[MOD_DST_PARAMETER_2]),   // color (metallic)
-        render_.wide, kAudioBlockSize >> 1);
+        render_.wide + kExpandHistory, kAudioBlockSize >> 1);
     ExpandHalfRate();
 
     return;
@@ -1125,7 +1154,7 @@ inline void Voice::RenderOscillators() {
         dst_[MOD_DST_MIX_CRUSH] >> 7,                // sync amount
         modulation_sources_[MOD_SRC_ENV_1],          // env for env-to-fold
         ComputePhaseIncrementFine(wc_pitch) << 1,
-        render_.wide,
+        render_.wide + kExpandHistory,
         kAudioBlockSize >> 1);
     ExpandHalfRate();
 
@@ -1300,10 +1329,7 @@ void Voice::ProcessBlock() {
   // Post-mix processing.
   if (is_special) {
     // In FM4OP/KS mode, skip noise/fuzz post-processing.
-#ifndef __AVR__
-    // On the AVR, ExpandHalfRateToRing already wrote the block into the ring.
-    audio_buffer.WriteBlock(render_.wide, kAudioBlockSize);
-#endif
+    // ExpandHalfRate (C or assembly) has already written the block out.
   } else {
     uint8_t noise = Random::state_msb();
     uint8_t noise_gain = U15ShiftRight7(dst_[MOD_DST_MIX_NOISE]);

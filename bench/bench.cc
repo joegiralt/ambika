@@ -171,6 +171,7 @@ static void WcTest() {
 volatile uint16_t exptest_blocks = 0;
 volatile uint16_t exptest_mismatches = 0;
 volatile uint16_t exptest_first[3];
+volatile uint16_t exptest_dbg[12];  // in[0..3], C out[0..3], asm out[0..3] of block 0
 static uint16_t exp_in[kAudioBlockSize / 2], exp_out[kAudioBlockSize];
 static void ExpTest() {
   uint16_t seed = 0xBEEF;
@@ -179,15 +180,19 @@ static void ExpTest() {
     for (uint8_t i = 0; i < kAudioBlockSize / 2; ++i) {
       seed = seed * 31421 + 6927;
       exp_in[i] = blk == 2 ? (i & 1 ? 4095 : 0) : (seed >> 4);  // 12-bit; one block of full swings
-      wide[i] = exp_in[i];
+      wide[5 + i] = exp_in[i];  // the engines render after the history
     }
-    Voice::ExpandHalfRateC();                       // in place: wide[0..39]
-    memcpy(exp_out, wide, sizeof(exp_out));
-    for (uint8_t i = 0; i < kAudioBlockSize / 2; ++i) wide[i] = exp_in[i];
     uint8_t w = blk == 3 ? 100 : 0;
+    AudioRing::write_ptr_ = w;
+    Voice::ExpandHalfRateC();                       // writes the ring at w
+    for (uint8_t k = 0; k < kAudioBlockSize; ++k) exp_out[k] = AudioRing::buffer_[(w + k) & 127];
+    for (uint8_t i = 0; i < kAudioBlockSize / 2; ++i) wide[5 + i] = exp_in[i];
     AudioRing::write_ptr_ = w;
     Voice::ExpandHalfRateToRing();
     ++exptest_blocks;
+    if (blk == 0) {
+      for (uint8_t k = 0; k < 4; ++k) { exptest_dbg[k] = exp_in[k]; exptest_dbg[4 + k] = exp_out[k]; exptest_dbg[8 + k] = AudioRing::buffer_[(w + k) & 127]; }
+    }
     for (uint8_t k = 0; k < kAudioBlockSize; ++k) {
       uint16_t a = AudioRing::buffer_[(w + k) & 127];
       if (a != exp_out[k]) {

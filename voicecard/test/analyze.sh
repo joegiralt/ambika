@@ -1,7 +1,7 @@
 #!/bin/sh
 # Host-side analysis for the voicecard engines.
 #
-#   sh voicecard/test/analyze.sh noise [-DFM_PHASE_DITHER]
+#   sh voicecard/test/analyze.sh noise [-DFM_NO_PHASE_DITHER]
 #       Spur and SNR of one sine operator, measured with coherent sampling.
 #
 #   sh voicecard/test/analyze.sh render OUT.wav PATCH.PAT NOTE [PATCH NOTE ...]

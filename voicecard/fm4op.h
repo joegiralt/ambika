@@ -22,6 +22,12 @@
 #include "avrlib/op.h"
 #include "voicecard/resources.h"
 
+// Phase dither is on unless a build says otherwise (analyze.sh noise
+// -DFM_NO_PHASE_DITHER measures the spurs it removes).
+#if !defined(FM_PHASE_DITHER) && !defined(FM_NO_PHASE_DITHER)
+#define FM_PHASE_DITHER
+#endif
+
 using namespace avrlib;
 
 namespace ambika {
@@ -228,16 +234,18 @@ class Fm4Op {
     // Truncating the phase to the waveform index leaves discrete, inharmonic
     // spurs - they beat against a held note and rattle. Dithering the
     // truncation trades them for broadband noise at the same total power,
-    // which is far less noticeable. 16-bit Galois LFSR, a few instructions.
+    // which is far less noticeable. One 16-bit Galois LFSR step a sample;
+    // the four operators get the word, its byte swap, and their complements,
+    // which costs nothing in the assembly render.
     dither_ = (dither_ >> 1) ^ (-(dither_ & 1) & 0xB400);
     uint16_t d = dither_;
-    uint16_t p[4];
-    for (uint8_t i = 0; i < 4; ++i) {
-      op_[i].phase += op_[i].phase_increment;
-      p[i] = (op_[i].phase + d) >> 16;
-      d = (d << 5) | (d >> 11);   // decorrelate the four operators
-    }
-    p0 = p[0]; p1 = p[1]; p2 = p[2]; p3 = p[3];
+    uint16_t ds = (d << 8) | (d >> 8);
+    op_[0].phase += op_[0].phase_increment; p0 = (op_[0].phase + d) >> 16;
+    op_[1].phase += op_[1].phase_increment; p1 = (op_[1].phase + ds) >> 16;
+    op_[2].phase += op_[2].phase_increment;
+    p2 = (op_[2].phase + static_cast<uint16_t>(~d)) >> 16;
+    op_[3].phase += op_[3].phase_increment;
+    p3 = (op_[3].phase + static_cast<uint16_t>(~ds)) >> 16;
 #else
     op_[0].phase += op_[0].phase_increment; p0 = op_[0].phase >> 16;
     op_[1].phase += op_[1].phase_increment; p1 = op_[1].phase >> 16;
@@ -515,7 +523,45 @@ struct FmRenderParams {
   uint8_t count;         // 31
   FmOperator* op;        // 32  the four phases (written back at the end)
   uint32_t inc[4];       // 34  phase increments, op 1 first
+  uint16_t dither;       // 50  LFSR state (FM_PHASE_DITHER)
 };
+
+
+// Dither pieces of the render loop (empty without FM_PHASE_DITHER). The LFSR
+// word lives in r0:r1 for the sample; the operators do not touch them. Each
+// operator adds its variant of the word to the low half of its phase and
+// carries into the index: the "adc" lines below pick that carry up.
+#ifdef FM_PHASE_DITHER
+#define FM_DITHER_STEP \
+    "ldd  r0, Y+50            \n\t" \
+    "ldd  r1, Y+51            \n\t" \
+    "lsr  r1                  \n\t" \
+    "ror  r0                  \n\t" \
+    "brcc 9f                  \n\t" \
+    "ldi  r22, 0xB4           \n\t" \
+    "eor  r1, r22             \n\t" \
+    "9: std  Y+50, r0         \n\t" \
+    "std  Y+51, r1            \n\t"
+#define FM_DITHER_ADD(lo, hi, hiidx0, hiidx1, variant) \
+    variant \
+    "add  r22, " lo "          \n\t" \
+    "adc  r23, " hi "          \n\t" \
+    "adc  r24, " hiidx0 "      \n\t" \
+    "adc  r25, " hiidx1 "      \n\t"
+#define FM_DV_D    "movw r22, r0             \n\t"
+#define FM_DV_DS   "mov  r22, r1             \n\t" "mov  r23, r0             \n\t"
+#define FM_DV_ND   FM_DV_D  "com  r22                 \n\t" "com  r23                 \n\t"
+#define FM_DV_NDS  FM_DV_DS "com  r22                 \n\t" "com  r23                 \n\t"
+#else
+#define FM_DITHER_STEP ""
+#define FM_DITHER_ADD(lo, hi, hiidx0, hiidx1, variant) \
+    "add  r24, " hiidx0 "      \n\t" \
+    "adc  r25, " hiidx1 "      \n\t"
+#define FM_DV_D ""
+#define FM_DV_DS ""
+#define FM_DV_ND ""
+#define FM_DV_NDS ""
+#endif
 
 // Register use inside the loop:
 //   r2-r5 phase of op 1, r6-r9 op 2, r10-r13 op 3, r14-r17 op 4 (low first)
@@ -547,6 +593,9 @@ inline __attribute__((noinline)) void Fm4Op::RenderAsm(
   for (uint8_t i = 0; i < 4; ++i) {
     params.inc[i] = op_[i].phase_increment;
   }
+#ifdef FM_PHASE_DITHER
+  params.dither = dither_;
+#endif
   // Y is gcc's frame pointer here, so it is saved and restored by hand
   // rather than declared clobbered.
   // Y is gcc's frame pointer here, so it is saved and restored by hand
@@ -605,12 +654,12 @@ inline __attribute__((noinline)) void Fm4Op::RenderAsm(
     "add  r24, r0             \n\t"
     "adc  r25, r1             \n\t"   /* r24:r25 = product >> 16 */
     "11:                      \n\t"
+    FM_DITHER_STEP
     "ldd  r18, Y+46           \n\t" "add  r14, r18            \n\t"
     "ldd  r18, Y+47           \n\t" "adc  r15, r18            \n\t"
     "ldd  r18, Y+48           \n\t" "adc  r16, r18            \n\t"
     "ldd  r18, Y+49           \n\t" "adc  r17, r18            \n\t"
-    "add  r24, r16            \n\t"
-    "adc  r25, r17            \n\t"
+    FM_DITHER_ADD("r14", "r15", "r16", "r17", FM_DV_NDS)
     "ldd  r21, Y+11           \n\t"
     "ldd  r22, Y+6            \n\t"
     "ldd  r23, Y+7            \n\t"
@@ -719,8 +768,7 @@ inline __attribute__((noinline)) void Fm4Op::RenderAsm(
     "ldd  r18, Y+43           \n\t" "adc  r11, r18            \n\t"
     "ldd  r18, Y+44           \n\t" "adc  r12, r18            \n\t"
     "ldd  r18, Y+45           \n\t" "adc  r13, r18            \n\t"
-    "add  r24, r12            \n\t"
-    "adc  r25, r13            \n\t"
+    FM_DITHER_ADD("r10", "r11", "r12", "r13", FM_DV_ND)
     "ldd  r21, Y+10           \n\t"
     "ldd  r22, Y+4            \n\t"
     "ldd  r23, Y+5            \n\t"
@@ -831,8 +879,7 @@ inline __attribute__((noinline)) void Fm4Op::RenderAsm(
     "ldd  r18, Y+39           \n\t" "adc  r7, r18            \n\t"
     "ldd  r18, Y+40           \n\t" "adc  r8, r18            \n\t"
     "ldd  r18, Y+41           \n\t" "adc  r9, r18            \n\t"
-    "add  r24, r8             \n\t"
-    "adc  r25, r9             \n\t"
+    FM_DITHER_ADD("r6", "r7", "r8", "r9", FM_DV_DS)
     "ldd  r21, Y+9            \n\t"
     "ldd  r22, Y+2            \n\t"
     "ldd  r23, Y+3            \n\t"
@@ -949,8 +996,7 @@ inline __attribute__((noinline)) void Fm4Op::RenderAsm(
     "ldd  r18, Y+35           \n\t" "adc  r3, r18            \n\t"
     "ldd  r18, Y+36           \n\t" "adc  r4, r18            \n\t"
     "ldd  r18, Y+37           \n\t" "adc  r5, r18            \n\t"
-    "add  r24, r4             \n\t"
-    "adc  r25, r5             \n\t"
+    FM_DITHER_ADD("r2", "r3", "r4", "r5", FM_DV_D)
     "ldd  r21, Y+8            \n\t"
     "ldd  r22, Y+0            \n\t"
     "ldd  r23, Y+1            \n\t"
@@ -1117,6 +1163,9 @@ inline __attribute__((noinline)) void Fm4Op::RenderAsm(
       "r23", "r24", "r25", "r30", "r31", "r0", "r1", "cc", "memory");
   feedback_[0] = params.fb[0];
   feedback_[1] = params.fb[1];
+#ifdef FM_PHASE_DITHER
+  dither_ = params.dither;
+#endif
 }
 #endif  // __AVR__
 

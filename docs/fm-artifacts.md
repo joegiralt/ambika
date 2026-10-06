@@ -94,8 +94,18 @@ prove the assembly against the C versions; run them after touching either.
 1. **Half-rate imaging** — fixed with the four-point reconstruction fit
    (−52 to −56 dBc). On hardware judged "slightly better".
 2. **Phase truncation** in `Fm4Op::Operator` (10-bit waveform index): discrete
-   spurs at −56 to −60 dBc. `FM_PHASE_DITHER` in `voicecard/fm4op.h` trades
-   them for broadband noise; it costs cycles, so it waits on the budget above.
+   spurs at −56 to −60 dBc. `FM_PHASE_DITHER` is on by default since the
+   evening of 6 Oct: one LFSR step a sample, the four operators take the
+   word, its byte swap and their complements. Worst spur −56 → −77 dBc for
+   2.6 dB more broadband noise (`analyze.sh noise`, with and without
+   `-DFM_NO_PHASE_DITHER`; the host bit-exact test builds without it).
+   About 750 cycles a block.
+3. **Reconstruction**: the four-point fit was replaced by a 6-tap half-band
+   interpolator (35, −233, 1222, 1222, −233, 35)/2048 with three samples of
+   lookahead (150 µs delay). Images through the engine: 1,759 Hz −54 → −67.5
+   dBc, 7,037 Hz −10 → −17 dBc. About 2,000 cycles a block for FM, KS and
+   West Coast. After both: FM sine 16,400, LatelyBass 19,250, DynoWurlie
+   19,650, KS 17,700, West Coast 15,600.
 3. `MOD_TRIM` in `make_patches.py` (modulator levels −4.5 dB) is a voicing
    decision, untouched.
 
