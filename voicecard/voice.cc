@@ -895,8 +895,11 @@ inline void Voice::ProcessModulationMatrix() {
     }
     uint8_t source = patch_.modulation[i].source;
     uint8_t destination = patch_.modulation[i].destination;
-    uint8_t source_value = modulation_sources_[source];
     if (destination != MOD_DST_VCA) {
+      if (amount == 0) {
+        continue;  // adds nothing; most slots are unused
+      }
+      uint8_t source_value = modulation_sources_[source];
       int16_t modulation = dst_[destination];
       if ((source >= MOD_SRC_LFO_1 && source <= MOD_SRC_LFO_4) ||
            source == MOD_SRC_PITCH_BEND ||
@@ -910,6 +913,7 @@ inline void Voice::ProcessModulationMatrix() {
     } else {
       // The VCA modulation is multiplicative, not additive. Yet another
       // Special case :(.
+      uint8_t source_value = modulation_sources_[source];
       if (amount < 0) {
         amount = -amount;
         source_value = 255 - source_value;
@@ -1011,28 +1015,35 @@ void Voice::ExpandHalfRate() {
   const uint8_t half = kAudioBlockSize >> 1;
   // Newest three samples of the previous block, oldest last.
   static uint16_t history[3] = { 2048, 2048, 2048 };
-  uint16_t keep[3] = { buffer[half - 1], buffer[half - 2], buffer[half - 3] };
-  for (uint8_t i = half; i--; ) {
-    uint16_t s0 = buffer[i];
-    uint16_t s1 = i >= 1 ? buffer[i - 1] : history[0 - i];
-    uint16_t s2 = i >= 2 ? buffer[i - 2] : history[1 - i];
-    uint16_t s3 = i >= 3 ? buffer[i - 3] : history[2 - i];
-    int16_t correction = (static_cast<int16_t>(s3) - static_cast<int16_t>(s1));
-    int16_t d = static_cast<int16_t>(s0) - static_cast<int16_t>(s2);
-    correction += d * 5;                     // shift-add on avr-gcc; d can be
-                                             // negative, so no literal shift
-    int16_t y = static_cast<int16_t>(s1) + (correction >> 4);
-    if (y < 0) {
-      y = 0;
-    } else if (y > 4095) {
-      y = 4095;
-    }
-    buffer[2 * i + 1] = s0;
-    buffer[2 * i] = y;
+  uint16_t keep0 = buffer[half - 1], keep1 = buffer[half - 2],
+           keep2 = buffer[half - 3];
+  // Sliding window: s0 is the newest. One load per output pair; the three
+  // oldest pairs read the history and are peeled off the loop.
+  int16_t s0 = buffer[half - 1], s1 = buffer[half - 2], s2 = buffer[half - 3];
+  int16_t s3;
+  uint16_t* out = buffer + kAudioBlockSize;  // writes run back to front
+#define EXPAND_PAIR()                                             \
+  {                                                               \
+    int16_t correction = s3 - s1;                                 \
+    int16_t d = s0 - s2;                                          \
+    correction += d * 5;                                          \
+    int16_t y = s1 + (correction >> 4);                           \
+    if (y < 0) y = 0; else if (y > 4095) y = 4095;                \
+    *--out = s0;                                                  \
+    *--out = y;                                                   \
   }
-  history[0] = keep[0];
-  history[1] = keep[1];
-  history[2] = keep[2];
+  for (uint8_t i = half - 1; i >= 3; --i) {
+    s3 = buffer[i - 3];
+    EXPAND_PAIR();
+    s0 = s1; s1 = s2; s2 = s3;
+  }
+  s3 = history[0]; EXPAND_PAIR(); s0 = s1; s1 = s2; s2 = s3;   // i = 2
+  s3 = history[1]; EXPAND_PAIR(); s0 = s1; s1 = s2; s2 = s3;   // i = 1
+  s3 = history[2]; EXPAND_PAIR();                              // i = 0
+#undef EXPAND_PAIR
+  history[0] = keep0;
+  history[1] = keep1;
+  history[2] = keep2;
 }
 
 /* static */
