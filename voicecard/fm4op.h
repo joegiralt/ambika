@@ -110,6 +110,9 @@ class Fm4Op {
   Fm4Op() { }
 
   void Init() {
+#ifdef FM_PHASE_DITHER
+    dither_ = 0xACE1;
+#endif
     for (uint8_t i = 0; i < 4; ++i) {
       op_[i].phase = 0;
       op_[i].phase_increment = 0;
@@ -195,9 +198,22 @@ class Fm4Op {
       uint16_t feedback_gain)     // FeedbackGain()
       __attribute__((always_inline)) {  // one caller: Render
     uint16_t p[4];
+#ifdef FM_PHASE_DITHER
+    // Truncating the phase to the waveform index leaves discrete, inharmonic
+    // spurs - they beat against a held note and rattle. Dithering the
+    // truncation trades them for broadband noise at the same total power,
+    // which is far less noticeable. 16-bit Galois LFSR, a few instructions.
+    dither_ = (dither_ >> 1) ^ (-(dither_ & 1) & 0xB400);
+    uint16_t d = dither_;
+#endif
     for (uint8_t i = 0; i < 4; ++i) {
       op_[i].phase += op_[i].phase_increment;
+#ifdef FM_PHASE_DITHER
+      p[i] = (op_[i].phase + d) >> 16;
+      d = (d << 5) | (d >> 11);   // decorrelate the four operators
+#else
       p[i] = op_[i].phase >> 16;
+#endif
     }
 
     int16_t fb = 0;
@@ -312,6 +328,9 @@ class Fm4Op {
  private:
   FmOperator op_[4];
   int16_t feedback_[2];
+#ifdef FM_PHASE_DITHER
+  uint16_t dither_;
+#endif
 
   DISALLOW_COPY_AND_ASSIGN(Fm4Op);
 };
