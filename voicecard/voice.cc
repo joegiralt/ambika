@@ -1374,6 +1374,17 @@ void Voice::ProcessBlock() {
     uint8_t post_wet = U14ShiftRight6(dst_[MOD_DST_MIX_FUZZ]);
     uint8_t post_dry = ~post_wet;
 
+    if (noise_gain == 0 && post_wet == 0) {
+      // Nothing to mix in: the loop below cost 7,400 cycles per block for
+      // two multiplies by 255/256. Widen the 8-bit block in place (back to
+      // front, so wide[i] never lands on an unread narrow sample) and copy.
+      for (uint8_t i = kAudioBlockSize; i--; ) {
+        render_.wide[i] = static_cast<uint16_t>(render_.narrow.osc1[i]) << 4;
+      }
+      audio_buffer.WriteBlock(render_.wide, kAudioBlockSize);
+      return;
+    }
+
     // Mix with noise, and apply distortion. The loop processes samples by 2 to
     // avoid some of the overhead of audio_buffer.Overwrite()
     for (uint8_t i = 0; i < kAudioBlockSize;) {
