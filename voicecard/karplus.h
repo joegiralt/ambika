@@ -100,11 +100,13 @@ static const prog_uint16_t kDispersionW2[] PROGMEM = {
     60, 58, 56, 54, 53,
 };
 
-// One-pole low-pass coefficient for the excitation color, by the number of
-// two-point-average passes the original ran (0-7): the same -3 dB point as
-// that many passes, in one pass.
+// Coefficient of the two cascaded one-poles that colour the excitation, by
+// the number of passes the original ran (0-7). Each of those passes was
+// y = x/2 + y1/2 in place, a one-pole with its pole at 1/2, so seven of
+// them were -3 dB at 710 Hz and -30 dB at 3 kHz; the two poles here share
+// the -3 dB point (2255, 1433, 1131, 964, 854, 774, 713 Hz).
 static const prog_uint8_t kKsColorK[8] PROGMEM = {
-    0, 187, 165, 150, 138, 129, 122, 116,
+    0, 166, 128, 109, 97, 88, 81, 76,
 };
 
 // 2^24 / (256 + 8 i), i = 0..65: the reciprocal for the fractional-delay
@@ -211,8 +213,11 @@ class KarplusStrong {
     int32_t sum = 0;
     switch (excitation_type) {
       case KS_EXC_CLICK:
+        // At the end of the ring: the loop keeps only the last n samples
+        // of it. (At the start, as before, it never entered the string.)
         for (uint8_t i = 0; i < kKarplusBufferSize; ++i) {
-          d[i] = (i < 2) ? 8191 : ((i < 4) ? -8191 : 0);
+          d[i] = i < kKarplusBufferSize - 4 ? 0
+              : (i < kKarplusBufferSize - 2 ? 8191 : -8191);
         }
         break;
       // One step of the register per byte, as before the rewrite: its low
@@ -255,34 +260,28 @@ class KarplusStrong {
     }
     Random::Seed(rng);
 
-    // One pass over the ring does the rest: the pluck position comb filter,
-    // the excitation color low-pass (the original ran up to seven passes of
-    // a two-point average; this is a one-pole with the same bandwidth), and
-    // the removal of the burst's average (a KS loop passes DC without loss,
-    // so any offset would stay in the string for its whole life). The mean
-    // is sum / 192, as (sum >> 6) * 85 >> 8, within 0.4%. (The first Render
-    // takes the exact average out of the part of it the loop keeps.)
+    // One pass over the ring does the rest: the excitation color low-pass
+    // (two one-poles in cascade, kKsColorK) and the removal of the burst's
+    // average (a KS loop passes DC without loss, so any offset would stay
+    // in the string for its whole life). The mean is sum / 192, as
+    // (sum >> 6) * 85 >> 8, within 0.4%. The pluck position comb and the
+    // exact average of what the loop keeps wait for the first Render, which
+    // knows the string's length.
     int16_t mean = S16U8MulShift8(sum >> 6, 85);
-    uint8_t notch = position > 4
-        ? (static_cast<uint16_t>(kKarplusBufferSize) * position) >> 7 : 0;
-    uint8_t comb_left = (notch > 1 && notch < kKarplusBufferSize)
-        ? kKarplusBufferSize - notch : 0;
     uint8_t k = pgm_read_byte(&kKsColorK[(127 - color) >> 4]);
     int16_t* p = delay_line_;
-    const int16_t* q = delay_line_ + notch;
     int16_t state = *p - mean;
+    int16_t state2 = state;
     for (uint8_t i = kKarplusBufferSize; i--; ) {
       int16_t v = *p - mean;
-      if (comb_left) {
-        v = (v + (*q++ - mean)) >> 1;
-        --comb_left;
-      }
       if (k) {
         state += S16U8MulShift8(v - state, k);
-        v = state;
+        state2 += S16U8MulShift8(state - state2, k);
+        v = state2;
       }
       *p++ = v;
     }
+    position_ = position;
 
     write_ = 0;
     s->dc = 0;
@@ -314,6 +313,20 @@ class KarplusStrong {
       // average out of those n samples (n is known here, not in Trigger);
       // the filter states start at zero, which weighs nothing.
       int16_t* seg = delay_line_ + kKarplusBufferSize - s->n;
+      // Pluck position: a comb over the string, x[i] - x[i - d] with d the
+      // position's share of the string's length, p: the harmonics come out
+      // as |sin(pi k p)|, as from a string plucked that far along (nothing
+      // of the 1/p-th harmonic, like a real pick there). Circular, as the
+      // string is. Before, the comb ran over the start of the burst with d
+      // a share of the whole ring, which the loop never saw above the
+      // lowest notes.
+      uint8_t d = (static_cast<uint16_t>(s->n) * position_) >> 7;
+      if (d > 0 && d < s->n) {
+        int16_t first = seg[0];  // (the wrap reads it before it changes)
+        for (uint8_t i = s->n; i-- > d; ) seg[i] = (seg[i] - seg[i - d]) >> 1;
+        for (uint8_t i = d; i-- > 1; ) seg[i] = (seg[i] - seg[i - d + s->n]) >> 1;
+        seg[0] = (first - seg[s->n - d]) >> 1;
+      }
       int32_t sum = 0;
       for (uint8_t i = s->n; i--; ) sum += seg[i];
       int16_t seg_mean = sum / s->n;
@@ -570,6 +583,7 @@ class KarplusStrong {
   int16_t delay_line_[kKarplusBufferSize];
   uint8_t write_;
   uint8_t excited_;
+  uint8_t position_;  // the pluck position, for the first Render
   uint16_t ens_lfo_phase_;
   uint8_t last_lp_;       // the tuning is cached by (period, lp, disp)
   uint8_t last_disp_;
