@@ -120,6 +120,27 @@ prove the assembly against the C versions; run them after touching either.
    leak was tried and reverted: holding the estimate for a block delays it
    ~30 samples, which at the fundamental is positive feedback (the host
    decay test caught it).
+   Later the same day, on the cards: every KS note above middle C lost its
+   fundamental within 0.3 s, in 3.03 as much as in the rewrite (what
+   seemed to sustain was the 8th harmonic). The stiffness stage blended in
+   a point (n/8 + 1) samples along the string, a comb with ~3 % loss per
+   trip at every partial but the 8th; forcing stiffness to 0 over NRPN
+   made every note sustain. Stiffness is now dispersion (lossless). Then
+   the string's DC: a 2-6 Hz wobble as loud as the note, from the leak
+   reading its accumulator in steps of 8 (a relay, which limit-cycles in a
+   lossless loop), the random mean of the n-sample window the loop keeps
+   (removed exactly in the first Render, where n is known), and filter
+   states started at a sample value (the loop conserves a weighted sum of
+   ring and states; the dispersion states weigh nearly double, so start
+   them at zero). Host sweep, VeloSteel C5, 24 seeds: sustain at 0.3 s
+   59-69 dB where seeds used to die; sub-15 Hz 57 -> 33 dB. The noise
+   burst took both bytes of one LFSR step, so every other sample was a copy
+   of one 17 back: a comb notched at 577 Hz, 4 dB off C5's fundamental
+   (ShimmerHarp); one step per byte now. The host harness renders note+12:
+   its "note 60" is the card's 72. On the cards, held-note fundamental
+   levels spread 10-20 dB between plucks (burst share, card gain, and for
+   ShimmerHarp the LFO-swept colour at note-on); 3.03's ShimmerHarp take
+   on the page was also 91 cents sharp.
 5. `MOD_TRIM` in `make_patches.py` (modulator levels −4.5 dB) is a voicing
    decision, untouched.
 

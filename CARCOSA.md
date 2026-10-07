@@ -131,10 +131,12 @@ Physical model of a plucked string. A noise burst excites a tuned delay line wit
 | 2 | dpth | 0-127 | Chorus depth: how far the two extra read heads glide (subtle doubling to deep detune) |
 | 3 | sprd | 0-127 | Chorus spread: LFO phase offset between the two heads (0 = together, 127 = opposite) |
 | 4 | wmix | 0-127 | Chorus wet/dry mix |
-| 5 | stif | 0-127 | Blends in an earlier point on the string: a comb-filter coloration (for real stiffness, use `colr` above 64) |
+| 5 | stif | 0-127 | Stiffness: adds dispersion, like `colr` above 64 (overtones stretch sharp, more on higher notes) |
 | 6 | feed | 0-127 | Sustain: reduces damping loss for a longer ring (never self-oscillates) |
 
 **Sustain:** strings ring about three times longer than a plain Karplus-Strong loop, and `damp`, `dcay` and `feed` shape it from there.
+
+**Since 3.03 (unreleased):** `stif` used to blend in a point a few samples along the string, which is a comb with real loss: notes above middle C lost their fundamental within a third of a second, and which notes died came down to the pluck. It is now dispersion, which is lossless. The string also no longer carries a slow DC wobble from the pluck, and the noise burst no longer has a comb notch near C5.
 
 **Metallic color:** above 64, `colr` adds dispersion to the string: its overtones stretch progressively sharp, like a stiff steel string, more on higher notes (a shimmer on low notes, bell-like at the top). The fundamental stays in tune.
 
