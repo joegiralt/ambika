@@ -539,15 +539,24 @@ static void TestKsBodyAtHalf() {
         f1 - f6, f1, f6);
 }
 
-// Cents between A4's 8th partial and 8x its fundamental, at a given color.
+// Cents between A4's 8th partial and 8x its fundamental, at a given color:
+// the median over three plucks, since one burst can leave that partial too
+// weak to find.
 static double KsStretch(uint8_t color) {
-  SetupKs();
-  patch()->osc[1].parameter = color;
-  Random::Seed(4321);
-  int n = Play(57, 900);
-  double f1 = PartialNear(n, ExpectedFrequency(57));
-  double f8 = PartialNear(n, 8 * f1);
-  return 1200 * log2(f8 / (8 * f1));
+  double c[3];
+  for (int k = 0; k < 3; ++k) {
+    SetupKs();
+    patch()->osc[1].parameter = color;
+    Random::Seed(4321 + k);
+    int n = Play(57, 900);
+    double f1 = PartialNear(n, ExpectedFrequency(57));
+    double f8 = PartialNear(n, 8 * f1);
+    c[k] = 1200 * log2(f8 / (8 * f1));
+  }
+  if (c[0] > c[1]) std::swap(c[0], c[1]);
+  if (c[1] > c[2]) std::swap(c[1], c[2]);
+  if (c[0] > c[1]) std::swap(c[0], c[1]);
+  return c[1];
 }
 
 // Bright excitation color makes the string metallic: overtones stretched

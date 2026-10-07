@@ -215,11 +215,16 @@ class KarplusStrong {
           d[i] = (i < 2) ? 8191 : ((i < 4) ? -8191 : 0);
         }
         break;
+      // One step of the register per byte, as before the rewrite: its low
+      // byte is its high byte of eight steps earlier, so taking both made
+      // every other sample a copy of one 17 back, a comb with its first
+      // notch at 577 Hz, 4 dB off the fundamental of a C5.
       case KS_EXC_BRIGHT:
         for (uint8_t i = kKarplusBufferSize; i--; ) {
           KS_LFSR_STEP(rng);
           int16_t a = static_cast<int8_t>((rng >> 8) ^ 0x80);
-          int16_t b = static_cast<int8_t>(rng ^ 0x80);
+          KS_LFSR_STEP(rng);
+          int16_t b = static_cast<int8_t>((rng >> 8) ^ 0x80);
           int16_t v = a * 48 + b * 16;
           sum += v;
           *d++ = v;
@@ -240,12 +245,9 @@ class KarplusStrong {
         break;
       }
       default:
-        for (uint8_t i = kKarplusBufferSize >> 1; i--; ) {
+        for (uint8_t i = kKarplusBufferSize; i--; ) {
           KS_LFSR_STEP(rng);
           int16_t v = static_cast<int16_t>(static_cast<int8_t>((rng >> 8) ^ 0x80)) * 64;
-          sum += v;
-          *d++ = v;
-          v = static_cast<int16_t>(static_cast<int8_t>(rng ^ 0x80)) * 64;
           sum += v;
           *d++ = v;
         }
