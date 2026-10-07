@@ -11,7 +11,7 @@ This manual covers what Carcosa adds or changes. Everything inherited from the A
 
 - **12-bit audio:** FM, Karplus-Strong and West Coast now send the voicecard DAC all 12 bits instead of 8, removing the 8-bit hiss (about 24 dB less noise). The classic engine is still 8-bit, like the stock Ambika.
 - **FM rebuilt to match the TX81Z:** the real TX81Z algorithms, waveforms and log-sine/volume ROMs, bit-exact against a reference; carrier levels now apply. All 128 TX81Z factory voices are in Bank T.
-- **Karplus-Strong rebuilt:** in tune, down to ~102 Hz, 3x sustain, a real body resonance, metallic excitation color, and a clean chorus.
+- **Karplus-Strong rebuilt:** in tune, down to ~102 Hz, 3x sustain, a real body resonance, metallic excitation color, stiffness as dispersion, and a clean chorus. (3.03: the string holds its fundamental above middle C, and carries no DC.)
 - **West Coast rebuilt:** in tune at low notes, 16-bit folding, bias and symmetry now distinct.
 - FM, KS and West Coast render at half rate (19.6 kHz) with interpolation, to fit the voicecard's CPU.
 
@@ -136,7 +136,7 @@ Physical model of a plucked string. A noise burst excites a tuned delay line wit
 
 **Sustain:** strings ring about three times longer than a plain Karplus-Strong loop, and `damp`, `dcay` and `feed` shape it from there.
 
-**Since 3.03 (unreleased):** `stif` used to blend in a point a few samples along the string, which is a comb with real loss: notes above middle C lost their fundamental within a third of a second, and which notes died came down to the pluck. It is now dispersion, which is lossless. The string also no longer carries a slow DC wobble from the pluck, and the noise burst no longer has a comb notch near C5.
+**Stiffness:** `stif` adds dispersion, like `colr` above 64. (Before 3.03 it blended in a point a few samples along the string, a comb with real loss: notes above middle C lost their fundamental within a third of a second, and which notes died came down to the pluck.)
 
 **Metallic color:** above 64, `colr` adds dispersion to the string: its overtones stretch progressively sharp, like a stiff steel string, more on higher notes (a shimmer on low notes, bell-like at the top). The fundamental stays in tune.
 
