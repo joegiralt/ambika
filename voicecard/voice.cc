@@ -1108,10 +1108,25 @@ inline void Voice::RenderOscillators() {
     int16_t ks_pitch = base_pitch + S8U8Mul(patch_.osc[0].range, 128)
         + patch_.osc[0].detune
         + ((dst_[MOD_DST_OSC_1] - 8192) >> 2);  // "pitch" in the mod matrix
-    // Period in samples at half rate, 8.8 fixed point: 2^32 / (16.8
-    // increment at half rate).
-    uint32_t increment = ComputePhaseIncrementFine(ks_pitch) << 1;
-    uint32_t period = 0xFFFFFFFFUL / (increment ? increment : 1);
+    // Period in samples at half rate, 8.8 fixed point: 2^31 / increment.
+    // The increment table read backwards is the reciprocal of the forward
+    // read (T[767 - i] = 2 T[0]^2 2^(-1/768) / T[i] ... up to a constant), so
+    // the 32-bit division (850 cycles) is a lookup and a multiply, within one
+    // unit of the division. kKsPeriodScale = 2^42 2^(1/768) / T[0]^2 with
+    // T[0] = 11104, the table's first entry.
+    static const uint16_t kKsPeriodScale = 35702;
+    int16_t ref_pitch = (ks_pitch >= kHighestNote ? kHighestNote : ks_pitch)
+        - kPitchTableStart;
+    uint8_t num_shifts = 0;
+    while (ref_pitch < 0) {
+      ref_pitch += kOctave;
+      ++num_shifts;
+    }
+    uint32_t period = static_cast<uint32_t>(
+        ResourcesManager::Lookup<uint16_t, uint16_t>(
+            lut_res_oscillator_increments, 767 - (ref_pitch >> 1))) *
+        kKsPeriodScale;
+    period = num_shifts < 20 ? period >> (20 - num_shifts) : 0xFFFFUL;
     if (period > 0xFFFF) period = 0xFFFF;
 
     karplus_.Render(

@@ -62,6 +62,7 @@ the bench's sample-for-sample comparison against the C reference):
 | expansion in assembly straight into the ring (FM, KS, WC) | 13,950 | | | KS 15,600; West Coast all-on 20,800 |
 | West Coast render in assembly | | | | West Coast all-on 13,600 |
 | classic: PWM loop, noise/fuzz post-mix and sub oscillator in assembly | | | | pad+PWM+sub+noise+fuzz 17,100; PWM alone 12,050 |
+| Karplus-Strong loop in assembly, pluck fill in one pass, period and allpass coefficient without 32-bit divisions, tuning cached | | | | ShimmerHarp (chorus+body) 27,500 -> 19,000; KotoBend 19,000 -> 14,100; VeloSteel 20,000 -> 14,100; note-on pluck 42,000-65,000 -> 16,000-23,000 |
 
 As of commit after 9757576: every patch tried is under budget by at least
 16 %. Each assembly loop has a bench comparison against the C version it
@@ -106,7 +107,20 @@ prove the assembly against the C versions; run them after touching either.
    dBc, 7,037 Hz −10 → −17 dBc. About 2,000 cycles a block for FM, KS and
    West Coast. After both: FM sine 16,400, LatelyBass 19,250, DynoWurlie
    19,650, KS 17,700, West Coast 15,600.
-3. `MOD_TRIM` in `make_patches.py` (modulator levels −4.5 dB) is a voicing
+4. **Karplus-Strong, 7 Oct.** The "KS 17,700" above was the bench's bare
+   KS patch; the bank M voices with ensemble and body were 27,500 (35 %
+   over), and the note-on pluck fill ran 42,000-65,000 cycles between
+   blocks, which lapped the ring on every pluck. `KarplusStrong::RenderAsm`
+   (BENCH_KSTEST against RenderC, 256 blocks), a one-pass pluck fill with a
+   one-pole colour filter matched to the old multi-pass average, the period
+   from the increment table read backwards instead of a 32-bit division,
+   the allpass coefficient from a reciprocal table, and the tuning cached
+   by (period, damping, dispersion). ShimmerHarp 19,000, KotoBend and
+   VeloSteel 14,100, pluck 16,000-23,000 (BENCH_TRIGGER). A per-block DC
+   leak was tried and reverted: holding the estimate for a block delays it
+   ~30 samples, which at the fundamental is positive feedback (the host
+   decay test caught it).
+5. `MOD_TRIM` in `make_patches.py` (modulator levels −4.5 dB) is a voicing
    decision, untouched.
 
 ## Tools

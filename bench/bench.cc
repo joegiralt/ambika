@@ -129,6 +129,49 @@ static void PmTest() {
   }
 }
 #endif
+#ifdef BENCH_KSTEST
+// KarplusStrong::RenderC against RenderAsm: the same pluck (same RNG seed)
+// into two strings, then four blocks each over excitation x metallic x
+// damping x chorus x (body, stiffness, sustain, decay) x period.
+#include "voicecard/karplus.h"
+volatile uint16_t kstest_blocks = 0;
+volatile uint16_t kstest_mismatches = 0;
+volatile uint16_t kstest_first[4];
+volatile uint16_t kstest_offsets[4];
+static KarplusStrong ks_c, ks_a;
+static uint16_t ks_out_c[20], ks_out_a[20];
+static void KsTest() {
+  kstest_offsets[0] = offsetof(KsState, dc);
+  kstest_offsets[1] = offsetof(KsState, c_abs);
+  kstest_offsets[2] = offsetof(KsState, round);
+  kstest_offsets[3] = offsetof(KsState, base);
+  for (uint8_t cfg = 0; cfg < 64; ++cfg) {
+    uint8_t exc = cfg & 3;
+    uint8_t color = (cfg & 4) ? 100 : 30;
+    uint8_t damping = (cfg & 8) ? 90 : 20;
+    uint8_t mix = (cfg & 16) ? 90 : 0, depth = (cfg & 16) ? 60 : 0;
+    uint8_t body = (cfg & 32) ? 80 : 0, stiff = (cfg & 32) ? 60 : 0;
+    uint8_t sustain = (cfg & 32) ? 50 : 0, decay = (cfg & 32) ? 40 : 0;
+    uint16_t period = (14 << 8) + cfg * 700;
+    ks_c.Init(); ks_a.Init();
+    Random::Seed(1234 + cfg); ks_c.Trigger(exc, color, 64);
+    Random::Seed(1234 + cfg); ks_a.Trigger(exc, color, 64);
+    for (uint8_t blk = 0; blk < 4; ++blk) {
+      ks_c.SetupBlock(period, damping, decay, body, 40, depth, 40, mix, stiff, sustain, color, 20);
+      ks_c.RenderC(ks_out_c);
+      ks_a.SetupBlock(period, damping, decay, body, 40, depth, 40, mix, stiff, sustain, color, 20);
+      ks_a.RenderAsm(ks_out_a);
+      ++kstest_blocks;
+      for (uint8_t k = 0; k < 20; ++k) {
+        if (ks_out_c[k] != ks_out_a[k]) {
+          if (!kstest_mismatches) { kstest_first[0] = cfg; kstest_first[1] = blk * 32 + k; kstest_first[2] = ks_out_c[k]; kstest_first[3] = ks_out_a[k]; }
+          ++kstest_mismatches;
+        }
+      }
+    }
+  }
+}
+#endif
 #ifdef BENCH_WCTEST
 // WestCoast::RenderC against RenderAsm: both from Init, same parameters,
 // over waveform x fm x sync x colour x sub x (bias, symmetry), four blocks.
@@ -338,6 +381,12 @@ int main(void) {
   bench_done();
   while (1) { }
 #endif
+#ifdef BENCH_KSTEST
+  KsTest();
+  done = 1;
+  bench_done();
+  while (1) { }
+#endif
 #ifdef BENCH_WCTEST
   WcTest();
   done = 1;
@@ -428,6 +477,19 @@ int main(void) {
 #endif
     voice.ProcessBlock(); AudioOutUpdateVca();
   }
+#ifdef BENCH_TRIGGER
+  // Cycles for a note-on (the Karplus-Strong pluck fill runs here, between
+  // blocks). Needs BENCH_NOISR (free-running timer).
+  {
+    uint16_t t0 = TCNT1;
+    voice.Trigger(BENCH_NOTE << 7, 100, 0);
+    uint16_t t1 = TCNT1;
+    cycles[0] = t1 - t0;
+  }
+  done = 1;
+  bench_done();
+  while (1) { }
+#endif
 #ifdef BENCH_SMOOTH
   // Largest sample-to-sample step in the rendered blocks of this patch: a
   // held sine at A3 moves at most ~75 DAC steps per sample. Catches the
