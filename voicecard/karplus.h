@@ -21,6 +21,7 @@
 #include "avrlib/base.h"
 #include "avrlib/op.h"
 #include "avrlib/random.h"
+#include "voicecard/fm4op.h"
 
 using namespace avrlib;
 
@@ -160,16 +161,30 @@ class KarplusStrong {
  public:
   KarplusStrong() { }
 
-  void Init() {
+  // The loop state lives in Fm4Op::params_, the per-block scratch the FM and
+  // West Coast renders use (one engine renders at a time, and an engine
+  // change re-runs Init), so it costs no RAM of its own: the voicecard has
+  // ~150 bytes of stack left and the pluck fill plus the assembly render's
+  // saved registers need some of it. The bench passes its own states.
+  static KsState* DefaultState() {
+#ifdef __AVR__
+    return reinterpret_cast<KsState*>(&Fm4Op::params_);
+#else
+    static KsState host_state;  // the host build has no params_
+    return &host_state;
+#endif
+  }
+  void Init(KsState* state = DefaultState()) {
+    s = state;
     write_ = 0;
     excited_ = 0;
-    s_.lp_state = 0;
-    s_.ap_x1 = s_.ap_y1 = 0;
-    s_.disp_x1 = s_.disp_y1 = 0;
-    s_.dc = 0;
-    s_.body_low = s_.body_band = 0;
-    s_.head1 = s_.head2 = 96 << 8;
-    s_.round = 0;
+    s->lp_state = 0;
+    s->ap_x1 = s->ap_y1 = 0;
+    s->disp_x1 = s->disp_y1 = 0;
+    s->dc = 0;
+    s->body_low = s->body_band = 0;
+    s->head1 = s->head2 = 96 << 8;
+    s->round = 0;
     ens_lfo_phase_ = 0;
     last_lp_ = 0;
     last_disp_ = 0;
@@ -261,10 +276,10 @@ class KarplusStrong {
     }
 
     write_ = 0;
-    s_.lp_state = 0;
-    s_.ap_x1 = s_.ap_y1 = 0;
-    s_.disp_x1 = s_.disp_y1 = 0;
-    s_.dc = 0;
+    s->lp_state = 0;
+    s->ap_x1 = s->ap_y1 = 0;
+    s->disp_x1 = s->disp_y1 = 0;
+    s->dc = 0;
     excited_ = 1;
   }
 
@@ -289,7 +304,7 @@ class KarplusStrong {
 #endif
   }
 
-  // The block's parameters from the patch values, into s_.
+  // The block's parameters from the patch values, into s->
   void SetupBlock(uint16_t period,
                   uint8_t damping, uint8_t decay, uint8_t body,
                   uint8_t ens_rate, uint8_t ens_depth, uint8_t ens_spread,
@@ -367,53 +382,53 @@ class KarplusStrong {
     uint16_t r1 = pgm_read_word(&kKsReciprocal[ri + 1]);
     uint16_t r = r0 - (((r0 - r1) * (d & 7)) >> 3);
     int32_t c = (static_cast<int32_t>(256 - d) * r) >> 8;
-    s_.n = n;
-    s_.c_abs = c < 0 ? -c : c;
-    s_.disp = disp;
-    s_.flags = c < 0 ? 32 : 0;
-    s_.stiff_adj = ((n >> 3) + 1) * 2 - 2;
+    s->n = n;
+    s->c_abs = c < 0 ? -c : c;
+    s->disp = disp;
+    s->flags = c < 0 ? 32 : 0;
+    s->stiff_adj = ((n >> 3) + 1) * 2 - 2;
     }
    tuned:
-    s_.lp = lp;
-    s_.stiff = stiffness >> 1;
-    s_.decay = (decay * 43) >> 8;  // (decay / 2) / 3
-    s_.ens_mix = ens_mix;
+    s->lp = lp;
+    s->stiff = stiffness >> 1;
+    s->decay = (decay * 43) >> 8;  // (decay / 2) / 3
+    s->ens_mix = ens_mix;
     // Ensemble (a chorus): two read heads glide through the string's
     // history around 96 samples back (+/-63), swept by a slow triangle LFO,
     // so the copies detune gently (Doppler). The LFO runs once per block:
     // 0.3-10 Hz, the second head offset in phase by the spread; each head's
     // delay then glides linearly to its new target within the block.
     uint8_t chorus = ens_mix && ens_depth;
-    s_.head_step1 = s_.head_step2 = 0;
+    s->head_step1 = s->head_step2 = 0;
     if (chorus) {
       uint8_t inc = 1 + ((static_cast<uint16_t>(ens_rate) * ens_rate) >> 9);
       ens_lfo_phase_ += static_cast<uint16_t>(inc) * size;
       uint16_t target1 = HeadDelay(ens_lfo_phase_, ens_depth);
       uint16_t target2 = HeadDelay(ens_lfo_phase_ + (ens_spread << 8), ens_depth);
       // / size, which is always 20 here (half a block): x 205 / 4096.
-      s_.head_step1 = S16U8MulShift8(static_cast<int16_t>(target1 - s_.head1), 205) >> 4;
-      s_.head_step2 = S16U8MulShift8(static_cast<int16_t>(target2 - s_.head2), 205) >> 4;
+      s->head_step1 = S16U8MulShift8(static_cast<int16_t>(target1 - s->head1), 205) >> 4;
+      s->head_step2 = S16U8MulShift8(static_cast<int16_t>(target2 - s->head2), 205) >> 4;
     }
     // Body amounts, once per block: a concave curve so half body already
     // gives ~3/4 of the effect.
     uint8_t body_curve = 255 - (body << 1);
     uint8_t body_amount = 255 - ((static_cast<uint16_t>(body_curve) * body_curve) >> 8);
-    s_.body_amount = body_amount;
-    s_.body_cut = (body_amount * 230) >> 8;   // 0.9x high-pass
-    s_.body_trim = (body_amount * 140) >> 8;  // ~-7 dB level
-    s_.flags = (s_.flags & 32) | (s_.disp ? 1 : 0) | (stiffness > 4 ? 2 : 0) |
-               (s_.decay ? 4 : 0) | (chorus ? 8 : 0) | (body > 4 ? 16 : 0);
-    s_.count = size;
+    s->body_amount = body_amount;
+    s->body_cut = (body_amount * 230) >> 8;   // 0.9x high-pass
+    s->body_trim = (body_amount * 140) >> 8;  // ~-7 dB level
+    s->flags = (s->flags & 32) | (s->disp ? 1 : 0) | (stiffness > 4 ? 2 : 0) |
+               (s->decay ? 4 : 0) | (chorus ? 8 : 0) | (body > 4 ? 16 : 0);
+    s->count = size;
   }
 
   // The loop, in C: the reference for RenderAsm (bench KSTEST compares
   // them sample for sample) and the host build.
   void RenderC(uint16_t* buffer) {
-    const uint8_t n = s_.n;
-    const uint8_t lp = s_.lp;
-    const uint8_t flags = s_.flags;
-    const uint16_t c_abs = s_.c_abs;
-    uint8_t size = s_.count;
+    const uint8_t n = s->n;
+    const uint8_t lp = s->lp;
+    const uint8_t flags = s->flags;
+    const uint16_t c_abs = s->c_abs;
+    uint8_t size = s->count;
     while (size--) {
       // The two oldest samples of the string, averaged with weight S on the
       // older one ("decay stretching", Jaffe & Smith): S (1 - S) sets the
@@ -429,37 +444,37 @@ class KarplusStrong {
       // (Blends are written a + (b - a) k with one multiply: every string
       // value is clamped before it is written, so differences fit 16 bits,
       // AVR's int.)
-      s_.lp_state += S16U8MulShift8(avg - s_.lp_state, lp);
-      int16_t x = s_.lp_state;
+      s->lp_state += S16U8MulShift8(avg - s->lp_state, lp);
+      int16_t x = s->lp_state;
 
       // Fractional delay: y = c (x - y1) + x1. The string runs within
       // +/-8191, so x - y1 fits 16 bits; clamp the allpass's brief overshoot.
-      int16_t ap = S16U16MulShift16(x - s_.ap_y1, c_abs);
+      int16_t ap = S16U16MulShift16(x - s->ap_y1, c_abs);
       // The multiply rounds down, losing half a unit per sample; a KS loop
       // keeps DC forever, so that would build into an offset. Adding 0 and
       // 1 alternately makes the rounding unbiased.
-      s_.round ^= 1;
-      int16_t y = ((flags & 32) ? -ap : ap) + s_.ap_x1 + s_.round;
+      s->round ^= 1;
+      int16_t y = ((flags & 32) ? -ap : ap) + s->ap_x1 + s->round;
       // Clamp here too, so the allpass's own state can never grow past what
       // the 16-bit difference above can hold.
       y = Clamp(y);
-      s_.ap_x1 = x;
-      s_.ap_y1 = y;
+      s->ap_x1 = x;
+      s->ap_y1 = y;
 
       if (flags & 1) {
         // y = a (x - y1) + x1 with a = -disp/256.
-        int16_t v = s_.disp_x1 - S16U8MulShift8(y - s_.disp_y1, s_.disp);
+        int16_t v = s->disp_x1 - S16U8MulShift8(y - s->disp_y1, s->disp);
         v = Clamp(v);
-        s_.disp_x1 = y;
-        s_.disp_y1 = v;
+        s->disp_x1 = y;
+        s->disp_y1 = v;
         y = v;
       }
 
       // Stiffness: blend in another point of the string.
       if (flags & 2) {
-        int16_t p = r + (s_.stiff_adj >> 1) + 1;
+        int16_t p = r + (s->stiff_adj >> 1) + 1;
         if (p >= kKarplusBufferSize) p -= kKarplusBufferSize;
-        y += S16U8MulShift8(delay_line_[p] - y, s_.stiff);
+        y += S16U8MulShift8(delay_line_[p] - y, s->stiff);
       }
 
       // DC leak (cutoff ~0.4 Hz, far below any note): rounding errors
@@ -469,15 +484,15 @@ class KarplusStrong {
       // the estimate for a block delays it ~30 samples, which at the
       // fundamental turns the leak into positive feedback (the host decay
       // test caught it).
-      s_.dc += y;
-      int16_t dc = static_cast<int16_t>(s_.dc >> 16) * 8;
-      s_.dc -= dc;
+      s->dc += y;
+      int16_t dc = static_cast<int16_t>(s->dc >> 16) * 8;
+      s->dc -= dc;
       y -= dc;
 
       // Decay: every sample passes once per period, so this is the loss
       // per trip around the string.
       if (flags & 4) {
-        y -= S16U8MulShift8(y, s_.decay) >> 1;
+        y -= S16U8MulShift8(y, s->decay) >> 1;
       }
 
       y = Clamp(y);
@@ -487,10 +502,10 @@ class KarplusStrong {
       // Ensemble: the two chorus heads, blended in by the mix.
       int16_t output = y;
       if (flags & 8) {
-        s_.head1 += s_.head_step1;
-        s_.head2 += s_.head_step2;
-        int16_t heads = (ReadHead(s_.head1) >> 1) + (ReadHead(s_.head2) >> 1);
-        output = y + S16U8MulShift8(heads - y, s_.ens_mix);
+        s->head1 += s->head_step1;
+        s->head2 += s->head_step2;
+        int16_t heads = (ReadHead(s->head1) >> 1) + (ReadHead(s->head2) >> 1);
+        output = y + S16U8MulShift8(heads - y, s->ens_mix);
       }
 
       // Body: a soundbox after the string. A Chamberlin state-variable
@@ -500,18 +515,18 @@ class KarplusStrong {
       int16_t out = output >> 2;  // 12-bit DAC sample (string at half scale)
       if (flags & 16) {
         int16_t in = out;
-        s_.body_low += s_.body_band >> kBodyFrequencyShift;
-        int16_t high = in - s_.body_low - (s_.body_band >> kBodyDampingShift);
-        s_.body_band += high >> kBodyFrequencyShift;
+        s->body_low += s->body_band >> kBodyFrequencyShift;
+        int16_t high = in - s->body_low - (s->body_band >> kBodyDampingShift);
+        s->body_band += high >> kBodyFrequencyShift;
         // At full body: 2x the (resonant) low-pass added and 0.9x of the
         // high-pass taken away: about +12 dB at 110-220 Hz, -17 dB at 880 Hz
         // and -22 dB above. The low-pass, not the band-pass: at Q 2 the
         // band-pass still passes 15% at 1.3 kHz and would refill the highs.
         // Then the level comes down ~7 dB so the boost can't clip. Mixed at
         // half scale so it all fits 16 bits.
-        int16_t half = (out >> 1) + S16U8MulShift8(s_.body_low, s_.body_amount) -
-            (S16U8MulShift8(high, s_.body_cut) >> 1);
-        half -= S16U8MulShift8(half, s_.body_trim);
+        int16_t half = (out >> 1) + S16U8MulShift8(s->body_low, s->body_amount) -
+            (S16U8MulShift8(high, s->body_cut) >> 1);
+        half -= S16U8MulShift8(half, s->body_trim);
         out = half * 2;
       }
       if (out > 2047) out = 2047;
@@ -524,7 +539,7 @@ class KarplusStrong {
   void RenderAsm(uint16_t* buffer);
 #endif
 
-  KsState s_;
+  KsState* s;
 
  private:
   int16_t delay_line_[kKarplusBufferSize];
@@ -566,10 +581,10 @@ class KarplusStrong {
 
 #ifdef __AVR__
 // The loop in assembly, same arithmetic as RenderC. Register use:
-// r2:r3 read pointer (W - 2n, wrapped; advances with W; &s_ on entry), r4:r5 write
+// r2:r3 read pointer (W - 2n, wrapped; advances with W; s on entry), r4:r5 write
 // pointer, r6:r7 and r8:r9 chorus head delays, r10:r11 and r12:r13 the
 // ring's base and end, r14 count, r15 flags, r16 lp, r17 S, r18-r25
-// scratch, X output, Y = &s_, Z ring reads. r1 is zero between multiplies.
+// scratch, X output, Y = s, Z ring reads. r1 is zero between multiplies.
 
 // (a:b, signed 16) * (k, unsigned 8) >> 8 into r24:r25, as S16U8MulShift8.
 // b and k must be in r16-r23.
@@ -639,19 +654,19 @@ class KarplusStrong {
     "adc  r25, r22            \n\t"
 
 inline __attribute__((noinline)) void KarplusStrong::RenderAsm(uint16_t* buffer) {
-  int16_t r = write_ - s_.n;
+  int16_t r = write_ - s->n;
   if (r < 0) r += kKarplusBufferSize;
-  s_.rp = reinterpret_cast<uint16_t>(delay_line_ + r);
-  s_.base = reinterpret_cast<uint16_t>(delay_line_);
-  // r2:r3 carries &s_ in and is then the read pointer.
-  register KsState* rp asm("r2") = &s_;
+  s->rp = reinterpret_cast<uint16_t>(delay_line_ + r);
+  s->base = reinterpret_cast<uint16_t>(delay_line_);
+  // r2:r3 carries s in and is then the read pointer.
+  register KsState* rp asm("r2") = s;
   register int16_t* wp asm("r4") = delay_line_ + write_;
-  register uint16_t h1 asm("r6") = s_.head1;
-  register uint16_t h2 asm("r8") = s_.head2;
+  register uint16_t h1 asm("r6") = s->head1;
+  register uint16_t h2 asm("r8") = s->head2;
   asm volatile(
     "push r28                 \n\t"
     "push r29                 \n\t"
-    "movw r28, r2             \n\t"   /* Y = &s_ */
+    "movw r28, r2             \n\t"   /* Y = s */
     "ldd  r2, Y+41            \n\t"   /* read pointer */
     "ldd  r3, Y+42            \n\t"
     "ldd  r10, Y+43           \n\t"   /* ring base, end */
@@ -972,8 +987,8 @@ inline __attribute__((noinline)) void KarplusStrong::RenderAsm(uint16_t* buffer)
       "r20", "r21", "r22", "r23", "r24", "r25", "r30", "r31", "r0", "r1",
       "cc", "memory");
   write_ = wp - delay_line_;
-  s_.head1 = h1;
-  s_.head2 = h2;
+  s->head1 = h1;
+  s->head2 = h2;
 }
 #endif  // __AVR__
 

@@ -40,6 +40,9 @@ int main(int argc, char** argv){
     voice.Init();
     memcpy(voice.mutable_patch_data(), data, 144);
     voice.ResetEngines();
+    // One block before the note, as on the card: it gives the envelopes
+    // their parameters (without it the VCA never opens).
+    audio_buffer.size = 0; voice.ProcessBlock();
     voice.Trigger((note + 12) << 7, 110, 0);
     printf("    %-16s note %d  engine=%d\n", nm, note, data[106]);
     int blocks = 0;

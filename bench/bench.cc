@@ -139,6 +139,7 @@ volatile uint16_t kstest_mismatches = 0;
 volatile uint16_t kstest_first[4];
 volatile uint16_t kstest_offsets[4];
 static KarplusStrong ks_c, ks_a;
+static KsState ks_state_c, ks_state_a;
 static uint16_t ks_out_c[20], ks_out_a[20];
 static void KsTest() {
   kstest_offsets[0] = offsetof(KsState, dc);
@@ -153,10 +154,12 @@ static void KsTest() {
     uint8_t body = (cfg & 32) ? 80 : 0, stiff = (cfg & 32) ? 60 : 0;
     uint8_t sustain = (cfg & 32) ? 50 : 0, decay = (cfg & 32) ? 40 : 0;
     uint16_t period = (14 << 8) + cfg * 700;
-    ks_c.Init(); ks_a.Init();
+    ks_c.Init(&ks_state_c); ks_a.Init(&ks_state_a);
     Random::Seed(1234 + cfg); ks_c.Trigger(exc, color, 64);
     Random::Seed(1234 + cfg); ks_a.Trigger(exc, color, 64);
-    for (uint8_t blk = 0; blk < 4; ++blk) {
+    // 16 blocks = 320 samples: the write and read pointers wrap the
+    // 192-sample ring at least once per configuration.
+    for (uint8_t blk = 0; blk < 16; ++blk) {
       ks_c.SetupBlock(period, damping, decay, body, 40, depth, 40, mix, stiff, sustain, color, 20);
       ks_c.RenderC(ks_out_c);
       ks_a.SetupBlock(period, damping, decay, body, 40, depth, 40, mix, stiff, sustain, color, 20);
